@@ -44,6 +44,17 @@ APP_BASE_URL = os.getenv("APP_BASE_URL", "http://localhost:8520").rstrip("/")
 WEBHOOK_HOST = os.getenv("WEBHOOK_HOST", "127.0.0.1")
 WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT", "8521"))
 
+# --- Email (Brevo) ----------------------------------------------------------
+# API key da Brevo > SMTP & API > API Keys. Senza chiave le email finiscono nel log (utile in locale).
+BREVO_API_KEY = os.getenv("BREVO_API_KEY", "").strip()
+# Mittente: deve essere un indirizzo verificato su Brevo (Senders, domains & dedicated IPs).
+EMAIL_SENDER = os.getenv("EMAIL_SENDER", "").strip()
+EMAIL_SENDER_NAME = os.getenv("EMAIL_SENDER_NAME", APP_TITLE).strip()
+# Validità dei codici inviati per email, tentativi ammessi e attesa minima tra due invii.
+EMAIL_CODE_MINUTES = 15
+EMAIL_CODE_MAX_ATTEMPTS = 5
+EMAIL_CODE_RESEND_SECONDS = 60
+
 # --- Scraper ----------------------------------------------------------------
 SCRAPER_TIMEOUT_SECONDS = 15
 SCRAPER_USER_AGENT = (

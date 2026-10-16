@@ -1,8 +1,8 @@
 """Utenti, accessi e crediti su Postgres (Supabase).
 
-Password e codici di recupero sono salvati solo come hash PBKDF2 con sale casuale.
-Non essendoci un server di posta, il reset della password usa un codice di recupero
-mostrato una sola volta alla registrazione (e rigenerato a ogni reset).
+Le password sono salvate solo come hash PBKDF2 con sale casuale.
+L'indirizzo email si conferma con un codice a 6 cifre inviato alla registrazione; lo stesso
+meccanismo (tabella email_codes, codici salvati solo come hash) serve per il reset della password.
 """
 
 import hashlib
@@ -15,7 +15,7 @@ from datetime import timedelta
 from psycopg import errors
 
 import config
-from services import db
+from services import db, email_service
 
 _PBKDF2_ITERATIONS = 600_000
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -23,7 +23,7 @@ MIN_PASSWORD_LENGTH = 8
 
 # Data di creazione già nel fuso dell'app, come testo «AAAA-MM-GG HH:MM:SS».
 _LOCAL_CREATED_AT = "to_char(created_at AT TIME ZONE %(tz)s, 'YYYY-MM-DD HH24:MI:SS') AS created_at"
-_USER_COLUMNS = f"id, email, credits, is_admin, can_save_applications, {_LOCAL_CREATED_AT}"
+_USER_COLUMNS = f"id, email, credits, is_admin, can_save_applications, email_verified, {_LOCAL_CREATED_AT}"
 
 
 class AuthError(Exception):
@@ -39,6 +39,7 @@ class User:
     created_at: str
     # Funzione «Le mie candidature», attivata per singolo utente dal pannello admin (gli admin l'hanno sempre).
     can_save_applications: bool
+    email_verified: bool
 
     @property
     def has_applications_archive(self) -> bool:
@@ -60,9 +61,8 @@ def _verify_secret(secret: str, stored: str | None) -> bool:
     return hmac.compare_digest(digest.hex(), expected)
 
 
-def _new_recovery_code() -> str:
-    raw = secrets.token_hex(6).upper()
-    return "-".join(raw[i:i + 4] for i in range(0, len(raw), 4))
+def _new_email_code() -> str:
+    return f"{secrets.randbelow(10**6):06d}"
 
 
 def _normalize_email(email: str) -> str:
@@ -81,7 +81,7 @@ def _to_user(row: dict | None) -> User | None:
     if row is None:
         return None
     return User(row["id"], row["email"], row["credits"], row["is_admin"], row["created_at"],
-                row["can_save_applications"])
+                row["can_save_applications"], row["email_verified"])
 
 
 def _select_user(where: str, params: dict) -> User | None:
@@ -100,22 +100,22 @@ def get_user(user_id: int) -> User | None:
     return _select_user("id = %(id)s", {"id": user_id})
 
 
-def register(email: str, password: str) -> tuple[User, str]:
-    """Crea l'utente e restituisce anche il codice di recupero da mostrargli una volta."""
+def register(email: str, password: str) -> User:
+    """Crea l'utente con email da confermare (poi va chiamato send_verification_code)."""
     email = _normalize_email(email)
     _check_password(password)
-    recovery_code = _new_recovery_code()
     try:
         with db.transaction() as conn:
             row = conn.execute(
-                "INSERT INTO users (email, password_hash, credits, is_admin, recovery_hash) "
-                f"VALUES (%(email)s, %(pw)s, %(credits)s, %(admin)s, %(rec)s) RETURNING {_USER_COLUMNS}",
+                "INSERT INTO users (email, password_hash, credits, is_admin) "
+                f"VALUES (%(email)s, %(pw)s, %(credits)s, %(admin)s) RETURNING {_USER_COLUMNS}",
                 {"email": email, "pw": _hash_secret(password), "credits": config.INITIAL_CREDITS,
-                 "admin": email in config.ADMIN_EMAILS, "rec": _hash_secret(recovery_code), "tz": config.APP_TIMEZONE},
+                 "admin": email in config.ADMIN_EMAILS, "tz": config.APP_TIMEZONE},
             ).fetchone()
     except errors.UniqueViolation as exc:
-        raise AuthError("Esiste già un account con questa email.") from exc
-    return _to_user(row), recovery_code
+        raise AuthError("Esiste già un account con questa email. Se è tuo e non ricordi la password, "
+                        "usa «Password dimenticata».") from exc
+    return _to_user(row)
 
 
 def login(email: str, password: str) -> User:
@@ -126,22 +126,96 @@ def login(email: str, password: str) -> User:
     return get_user(row["id"])
 
 
-def reset_password(email: str, recovery_code: str, new_password: str) -> str:
-    """Imposta la nuova password e restituisce il nuovo codice di recupero."""
-    _check_password(new_password)
-    email = email.strip().lower()
+# --- Codici via email -----------------------------------------------------------------
+_CODE_EMAILS = {
+    "verify": ("Conferma il tuo indirizzo email",
+               "Benvenuto in {app}! Inserisci questo codice nell'app per confermare il tuo indirizzo email."),
+    "reset": ("Reimposta la password",
+              "Hai chiesto di reimpostare la password di {app}. Inserisci questo codice nell'app."),
+}
+
+
+def _issue_code(user_id: int, email: str, purpose: str) -> None:
+    """Genera un nuovo codice (sostituisce il precedente) e lo invia per email."""
+    code = _new_email_code()
     with db.transaction() as conn:
-        row = conn.execute("SELECT id, recovery_hash FROM users WHERE email = %s FOR UPDATE", (email,)).fetchone()
-        if row is None or not _verify_secret(recovery_code.strip().upper(), row["recovery_hash"]):
-            raise AuthError("Email o codice di recupero non corretti.")
-        new_code = _new_recovery_code()
+        recent = conn.execute(
+            "SELECT 1 FROM email_codes WHERE user_id = %s AND purpose = %s AND created_at > now() - %s",
+            (user_id, purpose, timedelta(seconds=config.EMAIL_CODE_RESEND_SECONDS)),
+        ).fetchone()
+        if recent:
+            raise AuthError("Ti abbiamo appena inviato un codice: attendi un minuto prima di chiederne un altro.")
         conn.execute(
-            "UPDATE users SET password_hash = %s, recovery_hash = %s WHERE id = %s",
-            (_hash_secret(new_password), _hash_secret(new_code), row["id"]),
+            "INSERT INTO email_codes (user_id, purpose, code_hash, expires_at) VALUES (%s, %s, %s, now() + %s) "
+            "ON CONFLICT (user_id, purpose) DO UPDATE SET code_hash = excluded.code_hash, attempts = 0, "
+            "created_at = now(), expires_at = excluded.expires_at",
+            (user_id, purpose, _hash_secret(code), timedelta(minutes=config.EMAIL_CODE_MINUTES)),
         )
+    subject, intro = _CODE_EMAILS[purpose]
+    try:
+        email_service.send_code(email, subject, intro.format(app=config.APP_TITLE), code)
+    except email_service.EmailError:
+        # Codice mai arrivato: lo si toglie, così se ne può chiedere subito un altro.
+        with db.transaction() as conn:
+            conn.execute("DELETE FROM email_codes WHERE user_id = %s AND purpose = %s", (user_id, purpose))
+        raise
+
+
+def _check_code(user_id: int, purpose: str, code: str) -> None:
+    """Verifica il codice; AuthError se errato, scaduto o dopo troppi tentativi."""
+    # Il tentativo si conta in una transazione a sé, che resta salvata anche se il codice è errato.
+    with db.transaction() as conn:
+        row = conn.execute(
+            "UPDATE email_codes SET attempts = attempts + 1 WHERE user_id = %s AND purpose = %s "
+            "RETURNING code_hash, attempts, expires_at > now() AS valid",
+            (user_id, purpose),
+        ).fetchone()
+    if row is None or not row["valid"]:
+        raise AuthError("Codice scaduto o non richiesto: chiedine uno nuovo.")
+    if row["attempts"] > config.EMAIL_CODE_MAX_ATTEMPTS:
+        raise AuthError("Troppi tentativi con questo codice: chiedine uno nuovo.")
+    if not _verify_secret(code.strip().replace(" ", ""), row["code_hash"]):
+        raise AuthError("Codice non corretto.")
+
+
+def send_verification_code(user_id: int) -> None:
+    user = get_user(user_id)
+    if user is None or user.email_verified:
+        return
+    _issue_code(user.id, user.email, "verify")
+
+
+def verify_email(user_id: int, code: str) -> None:
+    _check_code(user_id, "verify", code)
+    with db.transaction() as conn:
+        conn.execute("UPDATE users SET email_verified = TRUE WHERE id = %s", (user_id,))
+        conn.execute("DELETE FROM email_codes WHERE user_id = %s AND purpose = 'verify'", (user_id,))
+
+
+def request_password_reset(email: str) -> None:
+    """Invia il codice di reset se l'account esiste; altrimenti non fa nulla (non rivela chi è registrato)."""
+    email = _normalize_email(email)
+    with db.transaction() as conn:
+        row = conn.execute("SELECT id FROM users WHERE email = %s", (email,)).fetchone()
+    if row is not None:
+        _issue_code(row["id"], email, "reset")
+
+
+def reset_password(email: str, code: str, new_password: str) -> User:
+    """Imposta la nuova password; il codice ricevuto per email conferma anche l'indirizzo."""
+    _check_password(new_password)
+    with db.transaction() as conn:
+        row = conn.execute("SELECT id FROM users WHERE email = %s", (email.strip().lower(),)).fetchone()
+    if row is None:
+        raise AuthError("Codice scaduto o non richiesto: chiedine uno nuovo.")
+    _check_code(row["id"], "reset", code)
+    with db.transaction() as conn:
+        conn.execute("UPDATE users SET password_hash = %s, email_verified = TRUE WHERE id = %s",
+                     (_hash_secret(new_password), row["id"]))
+        conn.execute("DELETE FROM email_codes WHERE user_id = %s", (row["id"],))
         # Nuova password: gli accessi ricordati sugli altri dispositivi non valgono più.
         conn.execute("DELETE FROM login_sessions WHERE user_id = %s", (row["id"],))
-    return new_code
+    return get_user(row["id"])
 
 
 def _token_hash(token: str) -> str:
@@ -242,7 +316,7 @@ def users_overview() -> list[dict]:
     """Utenti con saldo, operazioni con Claude e acquisti, per il pannello admin."""
     with db.transaction() as conn:
         return conn.execute("""
-            SELECT u.email, u.credits, u.is_admin, u.can_save_applications,
+            SELECT u.email, u.credits, u.is_admin, u.can_save_applications, u.email_verified,
                    to_char(u.created_at AT TIME ZONE %(tz)s, 'YYYY-MM-DD HH24:MI:SS') AS created_at,
                    (SELECT COUNT(*) FROM usage_log l WHERE l.user_id = u.id) AS claude_calls,
                    (SELECT COUNT(*) FROM payments p WHERE p.user_id = u.id) AS purchases,
@@ -291,6 +365,10 @@ def set_can_save_applications(email: str, enabled: bool) -> None:
 
 def set_admin(email: str, is_admin: bool) -> None:
     _update_user_field(email, "is_admin", is_admin)
+
+
+def set_email_verified(email: str, verified: bool) -> None:
+    _update_user_field(email, "email_verified", verified)
 
 
 def list_users() -> list[User]:

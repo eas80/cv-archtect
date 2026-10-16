@@ -38,10 +38,26 @@ Va fatto una volta sola, su un database vuoto (prima di registrare utenti su Sup
    | `STRIPE_SECRET_KEY` | `sk_test_...` (poi `sk_live_...`) |
    | `STRIPE_WEBHOOK_SECRET` | dal passo 3 (si può aggiungere dopo) |
    | `APP_BASE_URL` | l'indirizzo del servizio, es. `https://cv-architect.onrender.com` |
+   | `BREVO_API_KEY` | API key di Brevo (vedi sotto) |
+   | `EMAIL_SENDER` | indirizzo mittente verificato su Brevo |
 3. Al termine del deploy apri l'indirizzo e **registrati con l'email admin** (`ADMIN_EMAILS`).
 
 Piano Free: il servizio si spegne dopo 15 minuti senza visite e alla visita successiva impiega
 circa un minuto a ripartire. Per un uso commerciale conviene il piano Starter (sempre attivo).
+
+## Email (Brevo)
+
+Servono per la conferma dell'indirizzo alla registrazione e per il reset della password
+(codici a 6 cifre). Si usa l'API HTTP di Brevo perché Render, nel piano Free, blocca le porte SMTP.
+
+1. Crea un account gratuito su [brevo.com](https://www.brevo.com) (300 email al giorno).
+2. **Senders, domains & dedicated IPs → Senders → Add a sender**: inserisci l'indirizzo mittente
+   (anche una Gmail) e confermalo dal link che ricevi. Va in `EMAIL_SENDER`.
+3. **SMTP & API → API Keys → Generate a new API key**: va in `BREVO_API_KEY`.
+
+Senza `BREVO_API_KEY` le email non partono e il loro contenuto (codice compreso) viene scritto nel log:
+comodo in locale, da evitare in produzione. Gli account creati prima della conferma email risultano già
+confermati; `python manage_users.py verified <email> on` conferma a mano un indirizzo.
 
 ## 3. Stripe (webhook)
 

@@ -4,6 +4,7 @@ Esempi:
     python manage_users.py list
     python manage_users.py credits mario@example.com 10
     python manage_users.py admin mario@example.com on
+    python manage_users.py verified mario@example.com on
 """
 
 import argparse
@@ -22,6 +23,9 @@ def main() -> int:
     admin = sub.add_parser("admin", help="Attiva o disattiva i permessi di admin.")
     admin.add_argument("email")
     admin.add_argument("state", choices=["on", "off"])
+    verified = sub.add_parser("verified", help="Segna l'email di un utente come confermata o no.")
+    verified.add_argument("email")
+    verified.add_argument("state", choices=["on", "off"])
     args = parser.parse_args()
 
     auth_service.init_db()
@@ -35,6 +39,9 @@ def main() -> int:
                 parser.error("I crediti non possono essere negativi.")
             auth_service.set_credits(args.email, args.amount)
             print(f"Crediti di {args.email}: {args.amount}")
+        elif args.command == "verified":
+            auth_service.set_email_verified(args.email, args.state == "on")
+            print(f"Email confermata {args.state} per {args.email}")
         else:
             auth_service.set_admin(args.email, args.state == "on")
             print(f"Admin {args.state} per {args.email}")

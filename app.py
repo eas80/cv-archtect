@@ -20,6 +20,7 @@ from services import (
     ClaudeCVService,
     applications_service,
     auth_service,
+    email_service,
     payment_service,
     ClaudeServiceError,
     ScraperError,
@@ -243,22 +244,41 @@ def sign_out() -> None:
     reset_session()
     auth_service.delete_login_session(st.session_state.get("session_token"))
     set_session_cookie(None)
-    for key in ("user_id", "session_token", "recovery_code", "checkout", "known_credits"):
+    for key in ("user_id", "session_token", "checkout", "known_credits", "verify_send_error"):
         st.session_state[key] = None
 
 
-def show_recovery_code() -> None:
-    """Codice di recupero appena generato: visibile finché l'utente non conferma di averlo salvato."""
-    code = st.session_state.get("recovery_code")
-    if not code:
-        return
-    st.warning(
-        "**Salva questo codice di recupero.** Serve per reimpostare la password se la dimentichi "
-        "e non verrà più mostrato."
-    )
-    st.code(code, language=None)
-    if st.button("L'ho salvato", key="recovery_ack", use_container_width=True):
-        st.session_state.recovery_code = None
+def send_verification_code(user_id: int) -> None:
+    """Invia il codice di conferma; un eventuale errore resta visibile nella schermata di conferma."""
+    try:
+        auth_service.send_verification_code(user_id)
+        st.session_state.verify_send_error = None
+    except (auth_service.AuthError, email_service.EmailError) as exc:
+        st.session_state.verify_send_error = str(exc)
+
+
+def render_verify_email(user: auth_service.User) -> None:
+    """Schermata mostrata finché l'email non è confermata: il resto dell'app resta bloccato."""
+    st.subheader("Conferma il tuo indirizzo email")
+    st.write(f"Ti abbiamo inviato un codice di 6 cifre a **{user.email}**. Inseriscilo qui sotto per "
+             "iniziare a usare l'app.")
+    if error := st.session_state.get("verify_send_error"):
+        st.error(error)
+    with st.form("verify_form"):
+        code = st.text_input("Codice", max_chars=7, placeholder="123456", key="verify_code")
+        if st.form_submit_button("Conferma", type="primary", use_container_width=True):
+            try:
+                auth_service.verify_email(user.id, code)
+                st.session_state.pending_toast = "Email confermata: benvenuto!"
+                st.rerun()
+            except auth_service.AuthError as exc:
+                st.error(str(exc))
+    st.caption(f"Il codice scade dopo {config.EMAIL_CODE_MINUTES} minuti. Non lo trovi? Controlla anche "
+               "nella cartella spam.")
+    if st.button("Inviami un nuovo codice", key="verify_resend"):
+        send_verification_code(user.id)
+        if not st.session_state.get("verify_send_error"):
+            st.session_state.pending_toast = "Nuovo codice inviato."
         st.rerun()
 
 
@@ -291,30 +311,54 @@ def render_auth_forms() -> None:
                 st.error("Le due password non coincidono.")
             else:
                 try:
-                    user, code = auth_service.register(email, password)
+                    user = auth_service.register(email, password)
                     sign_in(user)
-                    st.session_state.recovery_code = code
+                    send_verification_code(user.id)
                     st.rerun()
                 except auth_service.AuthError as exc:
                     st.error(str(exc))
 
-    with reset_tab, st.form("reset_form"):
-        st.caption("Usa il codice di recupero ricevuto alla registrazione (o all'ultimo reset).")
-        email = st.text_input("Email", key="reset_email")
-        code = st.text_input("Codice di recupero", placeholder="XXXX-XXXX-XXXX", key="reset_code")
-        password = st.text_input("Nuova password", type="password", key="reset_password")
+    with reset_tab:
+        render_password_reset()
+
+
+def render_password_reset() -> None:
+    """Due passi: richiesta del codice via email, poi codice e nuova password."""
+    reset_email = st.session_state.get("reset_email_sent")
+    if not reset_email:
+        with st.form("reset_request_form"):
+            st.caption("Ti inviamo per email un codice per scegliere una nuova password.")
+            email = st.text_input("Email", key="reset_email")
+            if st.form_submit_button("Inviami il codice", type="primary", use_container_width=True):
+                try:
+                    auth_service.request_password_reset(email)
+                    st.session_state.reset_email_sent = email.strip().lower()
+                    st.rerun()
+                except (auth_service.AuthError, email_service.EmailError) as exc:
+                    st.error(str(exc))
+        return
+
+    st.caption(f"Se **{reset_email}** è registrata, ti abbiamo inviato un codice di 6 cifre "
+               f"(valido {config.EMAIL_CODE_MINUTES} minuti; controlla anche lo spam).")
+    with st.form("reset_form"):
+        code = st.text_input("Codice", max_chars=7, placeholder="123456", key="reset_code")
+        password = st.text_input("Nuova password", type="password", key="reset_password",
+                                 help=f"Almeno {auth_service.MIN_PASSWORD_LENGTH} caratteri.")
         confirm = st.text_input("Ripeti la nuova password", type="password", key="reset_confirm")
         if st.form_submit_button("Reimposta la password", type="primary", use_container_width=True):
             if password != confirm:
                 st.error("Le due password non coincidono.")
             else:
                 try:
-                    new_code = auth_service.reset_password(email, code, password)
-                    sign_in(auth_service.login(email, password))
-                    st.session_state.recovery_code = new_code
+                    sign_in(auth_service.reset_password(reset_email, code, password))
+                    st.session_state.reset_email_sent = None
+                    st.session_state.pending_toast = "Password aggiornata."
                     st.rerun()
                 except auth_service.AuthError as exc:
                     st.error(str(exc))
+    if st.button("Usa un'altra email o richiedi un nuovo codice", key="reset_restart", use_container_width=True):
+        st.session_state.reset_email_sent = None
+        st.rerun()
 
 
 AI_BENEFITS = (
@@ -426,7 +470,6 @@ def render_account(user: auth_service.User) -> None:
         st.success("Admin · utilizzo illimitato")
     else:
         render_balance()
-    show_recovery_code()
     st.button("Esci", use_container_width=True, on_click=sign_out, key="logout")
 
 
@@ -800,6 +843,15 @@ def render_job_input(api_key: str | None, cv: ResumeData, key: str) -> None:
         except ScraperError as exc:
             st.error(f"{exc}\n\nScegli «Incollo il testo dell'annuncio» e copia lì il testo.")
             return
+        problem = job_page_problem(api_key, job_text)
+        if problem:
+            st.error(
+                f"Non sono riuscito a leggere l'annuncio da questo link: {problem}\n\n"
+                "Non ti è stato scalato nessun credito. Scegli «Incollo il testo dell'annuncio» e copia lì il testo."
+            )
+            with st.expander("Testo che ho trovato nella pagina"):
+                st.text(job_text[:3000])
+            return
     job_text = job_text.strip()
     if not job_text:
         st.warning("Incolla il testo dell'annuncio.")
@@ -819,6 +871,26 @@ def render_job_input(api_key: str | None, cv: ResumeData, key: str) -> None:
         bump("tailored")
         bump("letter")
         st.rerun()
+
+
+def job_page_problem(api_key: str | None, page_text: str) -> str | None:
+    """Controllo gratuito (non scala crediti) che la pagina scaricata contenga davvero un annuncio.
+
+    Molti siti rispondono con una pagina di login, cookie o errore lunga abbastanza da superare
+    i controlli dello scraper: senza questo controllo Claude adatterebbe il CV a quel testo.
+    Restituisce il motivo se non è un annuncio; None se lo è o se il controllo non si può fare.
+    """
+    user = current_user()
+    if not api_key or user is None or (not user.is_admin and user.credits < 1):
+        return None  # ci pensa run_claude a mostrare l'errore
+    try:
+        with st.spinner("Controllo che la pagina contenga l'annuncio..."):
+            check = ClaudeCVService(api_key=api_key).check_job_posting(page_text)
+    except ClaudeServiceError:
+        return None
+    if check.is_job_posting:
+        return None
+    return check.reason.strip() or "la pagina non contiene il testo di un annuncio di lavoro."
 
 
 def score_comment(score: int) -> str:
@@ -1250,6 +1322,7 @@ def render_admin_panel() -> None:
         "Email": u["email"],
         "Crediti": u["credits"],
         "Admin": bool(u["is_admin"]),
+        "Email confermata": bool(u["email_verified"]),
         ARCHIVE_COLUMN: bool(u["can_save_applications"]),
         "Chiamate a Claude": u["claude_calls"],
         "Acquisti": u["purchases"],
@@ -1304,6 +1377,9 @@ def main() -> None:
         st.info("Pagamento annullato: non ti è stato addebitato nulla.")
     if user is None:
         st.info("👈 **Accedi o crea un account** dalla barra laterale per iniziare.")
+        return
+    if not user.email_verified:
+        render_verify_email(user)
         return
 
     sections = ([GUIDED_VIEW] + ([ARCHIVE_VIEW] if user.has_applications_archive else [])

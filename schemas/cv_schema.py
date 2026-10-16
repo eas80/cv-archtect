@@ -61,6 +61,15 @@ class JobMatchResult(BaseModel):
     cover_letter: str = Field(description="Lettera di presentazione mirata all'annuncio.")
 
 
+class JobPostingCheck(BaseModel):
+    is_job_posting: bool = Field(
+        description="True se il testo contiene davvero la descrizione di un'offerta di lavoro."
+    )
+    reason: str = Field(
+        description="Se non è un annuncio, cosa contiene invece la pagina (es. login, cookie, errore), in una frase."
+    )
+
+
 class DocumentRevision(BaseModel):
     tailored_cv: ResumeData = Field(description="CV adattato dopo le modifiche richieste.")
     cover_letter: str = Field(description="Lettera di presentazione dopo le modifiche richieste.")

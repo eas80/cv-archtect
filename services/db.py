@@ -31,9 +31,25 @@ CREATE TABLE IF NOT EXISTS users (
     credits               INTEGER     NOT NULL DEFAULT 0 CHECK (credits >= 0),
     is_admin              BOOLEAN     NOT NULL DEFAULT FALSE,
     created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
-    recovery_hash         TEXT,
+    recovery_hash         TEXT,  -- vecchio codice di recupero, sostituito dal reset via email
     -- «Le mie candidature», attivata per singolo utente dal pannello admin.
     can_save_applications BOOLEAN     NOT NULL DEFAULT FALSE
+);
+-- Email confermata con il codice inviato alla registrazione. Gli account creati prima
+-- della conferma email valgono come confermati (DEFAULT TRUE quando la colonna nasce),
+-- i nuovi partono non confermati.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE users ALTER COLUMN email_verified SET DEFAULT FALSE;
+
+-- Codici a 6 cifre inviati per email (conferma dell'indirizzo, reset della password): uno per scopo.
+CREATE TABLE IF NOT EXISTS email_codes (
+    user_id    BIGINT      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    purpose    TEXT        NOT NULL CHECK (purpose IN ('verify', 'reset')),
+    code_hash  TEXT        NOT NULL,
+    attempts   INTEGER     NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (user_id, purpose)
 );
 
 -- Acquisti già erogati: la chiave sulla sessione Stripe rende l'erogazione idempotente.
@@ -93,6 +109,7 @@ ALTER TABLE login_sessions     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE settings           ENABLE ROW LEVEL SECURITY;
 ALTER TABLE usage_log          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE saved_applications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE email_codes        ENABLE ROW LEVEL SECURITY;
 
 DO $$
 BEGIN
