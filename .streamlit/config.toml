@@ -1,0 +1,9 @@
+[server]
+port = 8520
+
+# Blu definito per entrambi i temi, così l'app segue il tema chiaro/scuro del sistema.
+[theme.light]
+primaryColor = "#2563EB"
+
+[theme.dark]
+primaryColor = "#2563EB"

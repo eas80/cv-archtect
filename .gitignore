@@ -1,0 +1,11 @@
+# Segreti e dati locali: non vanno mai nel repository
+.env
+database.db
+database.db-journal
+logs/
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
