@@ -1,7 +1,6 @@
 """Configurazione centralizzata dell'applicazione CV Architect."""
 
 import os
-from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -19,7 +18,12 @@ CLAUDE_EFFORT = os.getenv("CLAUDE_EFFORT", "medium")
 CLAUDE_TIMEOUT_SECONDS = float(os.getenv("CLAUDE_TIMEOUT_SECONDS", "300"))
 
 # --- Utenti e crediti -------------------------------------------------------
-DATABASE_PATH = Path(__file__).resolve().parent / "database.db"
+# Stringa di connessione Postgres (Supabase: Project Settings > Database > Connection string,
+# «Session pooler», raggiungibile anche dai server senza IPv6 come Render).
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+DB_POOL_MAX_SIZE = int(os.getenv("DB_POOL_MAX_SIZE", "5"))
+# Fuso orario per date e ore mostrate nell'app (i server, come Render, girano in UTC).
+APP_TIMEZONE = os.getenv("APP_TIMEZONE", "Europe/Rome")
 # Crediti regalati a ogni nuovo account (0: si acquistano); ogni analisi/generazione ne consuma 1.
 INITIAL_CREDITS = int(os.getenv("INITIAL_CREDITS", "0"))
 # Account admin (uso illimitato), separati da virgola. Sovrascrivibile da .env.

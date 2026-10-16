@@ -1,0 +1,28 @@
+# Blueprint Render: New > Blueprint > collega il repository GitHub.
+# I valori con «sync: false» vanno inseriti nella dashboard di Render (non stanno nel repository).
+services:
+  - type: web
+    name: cv-architect
+    runtime: python
+    plan: free
+    # Stessa zona del progetto Supabase (es. Frankfurt / eu-central-1) per query più veloci.
+    region: frankfurt
+    buildCommand: pip install -r requirements.txt
+    # App Streamlit e webhook Stripe nello stesso processo (vedi server.py).
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /_stcore/health
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      # Indirizzo pubblico del servizio, es. https://cv-architect.onrender.com
+      - key: APP_BASE_URL
+        sync: false
+      - key: ADMIN_EMAILS
+        value: easycons@gmail.com

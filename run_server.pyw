@@ -22,10 +22,11 @@ if LOG_FILE.exists() and LOG_FILE.stat().st_size > MAX_LOG_BYTES:
 log = open(LOG_FILE, "a", encoding="utf-8", buffering=1)
 sys.stdout = sys.stderr = log
 
-# .streamlit/config.toml (porta, tema) viene letto dalla cartella corrente.
+# .streamlit/config.toml (tema) e .env vengono letti dalla cartella corrente.
 os.chdir(ROOT)
+sys.path.insert(0, str(ROOT))
 
-from streamlit.web import cli  # noqa: E402
+import uvicorn  # noqa: E402
 
-sys.argv = ["streamlit", "run", str(ROOT / "app.py"), "--server.headless", "true"]
-sys.exit(cli.main())
+# Come in produzione: app e webhook Stripe (/stripe/webhook) nello stesso processo.
+uvicorn.run("server:app", host="127.0.0.1", port=8520)
