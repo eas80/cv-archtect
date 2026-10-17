@@ -1,8 +1,10 @@
 """CV Architect — percorso guidato: CV, offerta di lavoro, profilo LinkedIn."""
 
 import hashlib
+import html
 import io
 import re
+import time
 from urllib.parse import urlsplit
 
 import pandas as pd
@@ -123,6 +125,33 @@ STEPPER_CSS = """
   .cv-stepper { margin-bottom: 1rem; }
 }
 .cv-brand { font-size: 1.25rem; font-weight: 700; white-space: nowrap; }
+/* Barra in alto: Streamlit la rende scorrevole e, con il logo più alto della riga, comparirebbe
+   una barra di scorrimento accanto al menu ☰. */
+.st-key-topbar, .st-key-topbar [data-testid="stHorizontalBlock"] { overflow: visible !important; }
+
+/* Menu ☰: pulsante senza freccia, pannello a elenco con voci allineate a sinistra. */
+.st-key-topbar [data-testid="stPopoverButton"] div[aria-hidden="true"] { display: none; }
+.st-key-menu_panel { width: 270px; max-width: 80vw; gap: 0.1rem; }
+.st-key-menu_panel button[kind="tertiary"] { width: 100%; justify-content: flex-start; padding: 0.45rem 0.7rem;
+    border-radius: 0.5rem; min-height: 0; color: inherit; }
+.st-key-menu_panel button[kind="tertiary"] > div { justify-content: flex-start; }
+.st-key-menu_panel button[kind="tertiary"]:hover { background: rgba(128,128,128,0.14); color: inherit; }
+.st-key-menu_panel [class*="st-key-menu_cur_"] button { background: rgba(37,99,235,0.14); color: #2563EB;
+    font-weight: 600; }
+.st-key-menu_panel .st-key-menu_logout button { color: #DC2626; }
+.st-key-menu_panel .st-key-menu_logout button:hover { background: rgba(220,38,38,0.1); color: #DC2626; }
+.cv-menu-head { display: flex; align-items: center; gap: 0.7rem; padding: 0.2rem 0.3rem 0.8rem;
+    border-bottom: 1px solid rgba(128,128,128,0.25); }
+.cv-avatar { width: 2.4rem; height: 2.4rem; border-radius: 50%; background: #2563EB; color: #fff; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 1.05rem; }
+.cv-menu-email { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 190px; }
+.cv-menu-sub { font-size: 0.8rem; opacity: 0.7; }
+.cv-menu-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.6;
+    padding: 0.85rem 0.7rem 0.15rem; }
+.cv-menu-sep { border-top: 1px solid rgba(128,128,128,0.25); margin: 0.4rem 0 0.2rem; }
+/* I blocchi HTML del menu non devono sovrapporsi alle voci (Streamlit riduce il margine del markdown). */
+.st-key-menu_panel [data-testid="stMarkdownContainer"], .st-key-menu_panel .stMarkdown { margin: 0 !important; }
+.st-key-menu_panel .cv-menu-label { margin-top: 0.5rem; }
 </style>
 """
 
@@ -372,6 +401,7 @@ def render_welcome_page() -> None:
                 st.caption(text)
     with st.container(border=True):
         render_auth_forms()
+    st.button("✉️ Hai domande? Contattaci", type="tertiary", key="welcome_contact", on_click=open_contact_dialog)
 
 
 def render_auth_forms() -> None:
@@ -639,31 +669,48 @@ def show_view(view: str) -> None:
     request_scroll_top()
 
 
-def menu_item(label: str, key: str, action, *args, current: bool = False) -> None:
-    st.button(f"{label}  ✓" if current else label, key=f"menu_{key}", type="tertiary", use_container_width=True,
-              on_click=menu_action, args=(action, *args))
+def menu_item(label: str, icon: str, key: str, action, *args, current: bool = False) -> None:
+    # La voce della sezione aperta ha una key «menu_cur_*», evidenziata dal CSS del menu.
+    st.button(label, icon=f":material/{icon}:", key=f"menu_cur_{key}" if current else f"menu_{key}",
+              type="tertiary", width="stretch", on_click=menu_action, args=(action, *args))
+
+
+def menu_html(markup: str) -> None:
+    st.markdown(markup, unsafe_allow_html=True)
 
 
 def render_menu(user: auth_service.User) -> None:
-    with st.popover("", icon=":material/menu:", key="menu", on_change="rerun", help="Menu"):
-        st.markdown(f"**{user.email}**" + (" · Admin" if user.is_admin else ""))
-        if not user.email_verified:
-            menu_item("↪️ Esci", "logout", sign_out)
-            return
-        view = st.session_state.view
-        st.divider()
-        menu_item("🧭 Percorso guidato", "guided", show_view, GUIDED_VIEW, current=view == GUIDED_VIEW)
-        if user.has_applications_archive:
-            menu_item("📁 Le mie candidature", "archive", show_view, ARCHIVE_VIEW, current=view == ARCHIVE_VIEW)
-        if st.session_state.cv is not None:
-            menu_item("➕ Nuova candidatura (stesso CV)", "new_app", new_application)
-        if not user.is_admin:
-            menu_item("🪙 Crediti e acquisti", "credits", open_buy_dialog)
-        menu_item("🔄 Ricomincia da capo", "restart", lambda: st.session_state.update(open_restart=True))
+    with st.popover("", icon=":material/menu:", key="menu", on_change="rerun", help="Menu"), \
+            st.container(key="menu_panel"):
         if user.is_admin:
-            menu_item("🛠️ Pannello admin", "admin", show_view, ADMIN_VIEW, current=view == ADMIN_VIEW)
-        st.divider()
-        menu_item("↪️ Esci", "logout", sign_out)
+            status = "Admin · crediti illimitati"
+        elif not user.email_verified:
+            status = "Email da confermare"
+        else:
+            status = plural(user.credits, "credito", "crediti")
+        menu_html(f'<div class="cv-menu-head"><div class="cv-avatar">{html.escape(user.email[:1].upper())}</div>'
+                  f'<div><div class="cv-menu-email">{html.escape(user.email)}</div>'
+                  f'<div class="cv-menu-sub">{status}</div></div></div>')
+        if user.email_verified:
+            view = st.session_state.view
+            menu_html('<div class="cv-menu-label">Candidature</div>')
+            menu_item("Percorso guidato", "route", "guided", show_view, GUIDED_VIEW, current=view == GUIDED_VIEW)
+            if st.session_state.cv is not None:
+                menu_item("Nuova candidatura", "add_circle", "new_app", new_application)
+            if user.has_applications_archive:
+                menu_item("Le mie candidature", "folder_open", "archive", show_view, ARCHIVE_VIEW,
+                          current=view == ARCHIVE_VIEW)
+            menu_item("Ricomincia da capo", "restart_alt", "restart",
+                      lambda: st.session_state.update(open_restart=True))
+            menu_html('<div class="cv-menu-label">Account</div>')
+            if user.is_admin:
+                menu_item("Pannello admin", "admin_panel_settings", "admin", show_view, ADMIN_VIEW,
+                          current=view == ADMIN_VIEW)
+            else:
+                menu_item("Crediti e acquisti", "toll", "credits", open_buy_dialog)
+        menu_item("Contattaci", "mail", "contact", open_contact_dialog)
+        menu_html('<div class="cv-menu-sep"></div>')
+        menu_item("Esci", "logout", "logout", sign_out)
 
 
 def render_topbar(user: auth_service.User | None) -> None:
@@ -692,6 +739,48 @@ def restart_dialog() -> None:
         # Callback: l'azzeramento avviene anche se la finestra non viene ridisegnata.
         if st.button("Sì, ricomincia", type="primary", key="restart_confirm", on_click=reset_session):
             st.rerun()
+
+
+CONTACT_TOPICS = ("Domanda sul servizio", "Problema tecnico", "Pagamenti e crediti", "Suggerimento", "Altro")
+EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+
+
+@st.dialog("✉️ Contattaci")
+def contact_dialog() -> None:
+    user = current_user()
+    st.caption("Scrivici per domande, problemi o suggerimenti: ti rispondiamo per email.")
+    with st.form("contact_form", border=False):
+        name = st.text_input("Nome", max_chars=80)
+        email = st.text_input("La tua email", value=user.email if user else "", max_chars=120,
+                              help="Ti rispondiamo a questo indirizzo.")
+        topic = st.selectbox("Argomento", CONTACT_TOPICS)
+        message = st.text_area("Messaggio", height=180, max_chars=5000,
+                               placeholder="Descrivi la tua richiesta...")
+        if not st.form_submit_button("Invia", type="primary", use_container_width=True):
+            return
+    name, email, message = name.strip(), email.strip(), message.strip()
+    if not (name and message):
+        st.warning("Scrivi il tuo nome e il messaggio.")
+        return
+    if not EMAIL_RE.fullmatch(email):
+        st.warning("Indica un indirizzo email valido, così possiamo risponderti.")
+        return
+    wait = config.CONTACT_RESEND_SECONDS - (time.time() - st.session_state.get("contact_sent_at", 0))
+    if wait > 0:
+        st.warning(f"Hai appena inviato un messaggio: attendi {int(wait) + 1} secondi prima di inviarne un altro.")
+        return
+    try:
+        email_service.send_contact_message(name, email, topic, message, user.email if user else None)
+    except email_service.EmailError as exc:
+        st.error(f"{exc} In alternativa scrivici a {config.CONTACT_EMAIL}.")
+        return
+    st.session_state.contact_sent_at = time.time()
+    st.session_state.pending_toast = "Messaggio inviato: ti risponderemo al più presto."
+    st.rerun()
+
+
+def open_contact_dialog() -> None:
+    st.session_state.open_contact = True
 
 
 def open_pending_dialogs() -> None:
@@ -1844,6 +1933,9 @@ def main() -> None:
     if toast := st.session_state.pop("pending_toast", None):
         st.toast(toast, icon="✅")
     api_key = resolve_api_key(user)
+    # Il modulo «Contattaci» si apre in ogni pagina, anche prima dell'accesso.
+    if st.session_state.pop("open_contact", False):
+        contact_dialog()
 
     payment = st.query_params.pop("payment", None)
     if payment in ("success", "cancel") and user is not None and render_payment_return(payment):

@@ -40,22 +40,39 @@ def send_code(to: str, subject: str, intro: str, code: str) -> None:
     _send(to, subject, body, text)
 
 
-def _send(to: str, subject: str, html_body: str, text_body: str) -> None:
+def send_contact_message(name: str, reply_to: str, topic: str, message: str, account: str | None) -> None:
+    """Inoltra il messaggio del modulo «Contattaci»: «Rispondi» nella casella va all'utente."""
+    account_line = f"Account: {account}" if account else "Account: non ha fatto l'accesso"
+    text = f"Da: {name} <{reply_to}>\n{account_line}\nArgomento: {topic}\n\n{message}"
+    body = f"""\
+<div style="font-family:Arial,sans-serif;font-size:15px;color:#111827;max-width:640px">
+  <p style="color:#4B5563">Da: <b>{html.escape(name)}</b> &lt;{html.escape(reply_to)}&gt;<br>
+     {html.escape(account_line)}<br>Argomento: {html.escape(topic)}</p>
+  <p style="white-space:pre-wrap">{html.escape(message)}</p>
+</div>"""
+    _send(config.CONTACT_EMAIL, f"[{config.APP_TITLE}] {topic} — {name}", body, text,
+          reply_to={"email": reply_to, "name": name})
+
+
+def _send(to: str, subject: str, html_body: str, text_body: str, reply_to: dict | None = None) -> None:
     if not email_enabled():
         log.warning("Email non configurata (BREVO_API_KEY/EMAIL_SENDER): non inviata a %s.\n%s\n%s",
                     to, subject, text_body)
         return
+    payload = {
+        "sender": {"email": config.EMAIL_SENDER, "name": config.EMAIL_SENDER_NAME},
+        "to": [{"email": to}],
+        "subject": subject,
+        "htmlContent": html_body,
+        "textContent": text_body,
+    }
+    if reply_to:
+        payload["replyTo"] = reply_to
     try:
         response = requests.post(
             _BREVO_URL,
             headers={"api-key": config.BREVO_API_KEY, "accept": "application/json"},
-            json={
-                "sender": {"email": config.EMAIL_SENDER, "name": config.EMAIL_SENDER_NAME},
-                "to": [{"email": to}],
-                "subject": subject,
-                "htmlContent": html_body,
-                "textContent": text_body,
-            },
+            json=payload,
             timeout=15,
         )
     except requests.RequestException as exc:

@@ -57,6 +57,9 @@ BREVO_API_KEY = os.getenv("BREVO_API_KEY", "").strip()
 EMAIL_SENDER = os.getenv("EMAIL_SENDER", "").strip()
 EMAIL_SENDER_NAME = os.getenv("EMAIL_SENDER_NAME", APP_TITLE).strip()
 # Validità dei codici inviati per email, tentativi ammessi e attesa minima tra due invii.
+# Destinatario dei messaggi inviati dal modulo «Contattaci».
+CONTACT_EMAIL = os.getenv("CONTACT_EMAIL", "cv.architect.info@gmail.com").strip()
+CONTACT_RESEND_SECONDS = 60
 EMAIL_CODE_MINUTES = 15
 EMAIL_CODE_MAX_ATTEMPTS = 5
 EMAIL_CODE_RESEND_SECONDS = 60
