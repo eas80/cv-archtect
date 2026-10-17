@@ -3,6 +3,7 @@
 import hashlib
 import io
 import re
+from urllib.parse import urlsplit
 
 import pandas as pd
 import streamlit as st
@@ -247,9 +248,21 @@ def restore_login() -> None:
         st.session_state.session_token = token
 
 
+def current_base_url() -> str:
+    """Indirizzo dell'app così come lo vede il browser (es. https://cv-architect.onrender.com).
+
+    Serve per il ritorno da Stripe e per il cookie: non dipende da APP_BASE_URL, che può mancare
+    o essere sbagliata. Se l'indirizzo della pagina non è disponibile si usa APP_BASE_URL.
+    """
+    parts = urlsplit(st.context.url or "")
+    if parts.scheme in ("http", "https") and parts.netloc:
+        return f"{parts.scheme}://{parts.netloc}"
+    return config.APP_BASE_URL
+
+
 def set_session_cookie(token: str | None) -> None:
     """Prenota la scrittura (o, con None, la cancellazione) del cookie: la fa emit_cookie_script."""
-    secure = "; Secure" if config.APP_BASE_URL.startswith("https://") else ""
+    secure = "; Secure" if current_base_url().startswith("https://") else ""
     max_age = config.SESSION_DAYS * 86400 if token else 0
     st.session_state.cookie_script = (
         f"<script>document.cookie = '{SESSION_COOKIE}={token or ''}; Max-Age={max_age}; Path=/; "
@@ -467,7 +480,7 @@ def render_buy_credits(user: auth_service.User, key: str = "buy") -> None:
     )
     if st.button("Procedi al pagamento", key=f"{key}_go", type="primary", use_container_width=True):
         try:
-            st.session_state.checkout = (pack_id, *payment_service.create_checkout(user, pack_id))
+            st.session_state.checkout = (pack_id, *payment_service.create_checkout(user, pack_id, current_base_url()))
         except payment_service.PaymentError as exc:
             st.error(str(exc))
     checkout = st.session_state.get("checkout")

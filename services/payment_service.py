@@ -45,9 +45,14 @@ def _client() -> stripe.StripeClient:
     return stripe.StripeClient(config.STRIPE_SECRET_KEY)
 
 
-def create_checkout(user: auth_service.User, pack_id: str) -> tuple[str, str]:
-    """Crea una Checkout Session per il pacchetto; restituisce (id sessione, URL di pagamento)."""
+def create_checkout(user: auth_service.User, pack_id: str, base_url: str | None = None) -> tuple[str, str]:
+    """Crea una Checkout Session per il pacchetto; restituisce (id sessione, URL di pagamento).
+
+    `base_url` è l'indirizzo dell'app a cui Stripe riporta l'utente (di norma quello della pagina
+    aperta); se manca si usa APP_BASE_URL.
+    """
     pack = CREDIT_PACKS[pack_id]
+    base_url = (base_url or config.APP_BASE_URL).rstrip("/")
     try:
         session = _client().v1.checkout.sessions.create(params={
             "mode": "payment",
@@ -65,8 +70,8 @@ def create_checkout(user: auth_service.User, pack_id: str) -> tuple[str, str]:
             "customer_email": user.email,
             "client_reference_id": str(user.id),
             "metadata": {"user_id": str(user.id), "pack_id": pack_id},
-            "success_url": f"{config.APP_BASE_URL}/?payment=success",
-            "cancel_url": f"{config.APP_BASE_URL}/?payment=cancel",
+            "success_url": f"{base_url}/?payment=success",
+            "cancel_url": f"{base_url}/?payment=cancel",
         })
     except stripe.StripeError as exc:
         log.exception("Creazione Checkout Session fallita")
