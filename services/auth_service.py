@@ -371,6 +371,28 @@ def set_email_verified(email: str, verified: bool) -> None:
     _update_user_field(email, "email_verified", verified)
 
 
+def set_password(email: str, new_password: str) -> None:
+    """Password impostata dall'admin: chiude gli accessi aperti dell'utente su tutti i dispositivi."""
+    _check_password(new_password)
+    with db.transaction() as conn:
+        row = conn.execute("UPDATE users SET password_hash = %s WHERE email = %s RETURNING id",
+                           (_hash_secret(new_password), email.strip().lower())).fetchone()
+        if row is None:
+            raise AuthError(f"Nessun utente con email {email}.")
+        conn.execute("DELETE FROM login_sessions WHERE user_id = %s", (row["id"],))
+        conn.execute("DELETE FROM email_codes WHERE user_id = %s AND purpose = 'reset'", (row["id"],))
+
+
+def delete_user(email: str) -> None:
+    """Elimina l'account con accessi, codici e candidature salvate.
+
+    Pagamenti e statistiche di utilizzo restano, senza più l'utente collegato (ON DELETE SET NULL).
+    """
+    with db.transaction() as conn:
+        if not conn.execute("DELETE FROM users WHERE email = %s", (email.strip().lower(),)).rowcount:
+            raise AuthError(f"Nessun utente con email {email}.")
+
+
 def list_users() -> list[User]:
     with db.transaction() as conn:
         rows = conn.execute(f"SELECT {_USER_COLUMNS} FROM users ORDER BY id", {"tz": config.APP_TIMEZONE}).fetchall()

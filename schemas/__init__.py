@@ -6,6 +6,7 @@ from .cv_schema import (
     JobPostingCheck,
     LinkedInContent,
     ResumeData,
+    TranslatedDocuments,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "JobPostingCheck",
     "LinkedInContent",
     "ResumeData",
+    "TranslatedDocuments",
 ]

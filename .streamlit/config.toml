@@ -1,6 +1,11 @@
 [server]
 port = 8520
 
+# Menu nativo di Streamlit (⋮) nella versione per gli utenti: resta solo per Impostazioni
+# (tema chiaro/scuro) e stampa; la navigazione è nel menu ☰ dell'app.
+[client]
+toolbarMode = "viewer"
+
 # Blu definito per entrambi i temi, così l'app segue il tema chiaro/scuro del sistema.
 [theme.light]
 primaryColor = "#2563EB"

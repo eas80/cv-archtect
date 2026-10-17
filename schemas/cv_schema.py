@@ -70,6 +70,13 @@ class JobPostingCheck(BaseModel):
     )
 
 
+class TranslatedDocuments(BaseModel):
+    cv: ResumeData = Field(description="CV tradotto, con la stessa struttura e gli stessi fatti dell'originale.")
+    cover_letter: Optional[str] = Field(
+        default=None, description="Lettera tradotta; null se non è stata fornita una lettera."
+    )
+
+
 class DocumentRevision(BaseModel):
     tailored_cv: ResumeData = Field(description="CV adattato dopo le modifiche richieste.")
     cover_letter: str = Field(description="Lettera di presentazione dopo le modifiche richieste.")

@@ -1,5 +1,6 @@
 """CV Architect — percorso guidato: CV, offerta di lavoro, profilo LinkedIn."""
 
+import hashlib
 import io
 import re
 
@@ -26,6 +27,7 @@ from services import (
     ScraperError,
     extract_job_description_from_url,
     guess_language,
+    pdf_page_images,
     render_cover_letter_pdf,
     render_cv_pdf,
 )
@@ -34,8 +36,6 @@ st.set_page_config(
     page_title=config.APP_TITLE,
     page_icon=config.APP_ICON,
     layout="centered",
-    # Accesso e crediti stanno nella sidebar: va mostrata subito.
-    initial_sidebar_state="expanded",
 )
 
 CV_MARKDOWN_TEMPLATE = Template(
@@ -117,6 +117,11 @@ STEPPER_CSS = """
 .cv-step.skipped .cv-dot { border-style: dashed; }
 .cv-bar { flex: 1; height: 3px; margin-top: 1.1rem; border-radius: 2px; background: rgba(128,128,128,0.3); }
 .cv-bar.done { background: #16A34A; }
+@media (max-width: 480px) {
+  .cv-label { display: none; }
+  .cv-stepper { margin-bottom: 1rem; }
+}
+.cv-brand { font-size: 1.25rem; font-weight: 700; white-space: nowrap; }
 </style>
 """
 
@@ -127,11 +132,16 @@ STEPPER_CSS = """
 JOB_KEYS = ("match", "match_prev", "job_text", "saved_app_id")
 
 
+# Sezioni dell'app, scelte dal menu ☰.
+GUIDED_VIEW, ARCHIVE_VIEW, ADMIN_VIEW = "guided", "archive", "admin"
+
+
 def init_state() -> None:
     for key in ("cv", "cv_source_text", "linkedin", *JOB_KEYS):
         st.session_state.setdefault(key, None)
     st.session_state.setdefault("step", 1)
     st.session_state.setdefault("job_skipped", False)
+    st.session_state.setdefault("view", GUIDED_VIEW)
 
 
 def reset_session() -> None:
@@ -139,6 +149,20 @@ def reset_session() -> None:
         st.session_state[key] = None
     st.session_state.step = 1
     st.session_state.job_skipped = False
+    st.session_state.view = GUIDED_VIEW
+    request_scroll_top()
+
+
+def new_application() -> None:
+    """Nuova candidatura con lo stesso CV: si azzera solo ciò che dipende dall'annuncio.
+
+    I testi LinkedIn restano: il profilo è uno solo e vale per tutte le candidature.
+    """
+    for key in JOB_KEYS:
+        st.session_state[key] = None
+    st.session_state.job_skipped = False
+    st.session_state.view = GUIDED_VIEW
+    go_to(2)
 
 
 def step_done(step: int) -> bool:
@@ -157,11 +181,24 @@ def step_unlocked(step: int) -> bool:
 
 def go_to(step: int) -> None:
     st.session_state.step = step
+    request_scroll_top()
 
 
 def skip_job() -> None:
     st.session_state.job_skipped = True
-    st.session_state.step = 3
+    go_to(3)
+
+
+def request_scroll_top() -> None:
+    """Al prossimo giro la pagina torna in cima: Streamlit altrimenti conserva lo scorrimento."""
+    st.session_state.scroll_top = True
+
+
+def emit_scroll_script() -> None:
+    if st.session_state.pop("scroll_top", False):
+        # .st-key-topbar è la classe che Streamlit assegna al container con key="topbar".
+        st.html("<script>document.querySelector('.st-key-topbar')?.scrollIntoView({block: 'start'});</script>",
+                unsafe_allow_javascript=True)
 
 
 def edit_toggle(label: str, key: str) -> bool:
@@ -244,7 +281,7 @@ def sign_out() -> None:
     reset_session()
     auth_service.delete_login_session(st.session_state.get("session_token"))
     set_session_cookie(None)
-    for key in ("user_id", "session_token", "checkout", "known_credits", "verify_send_error"):
+    for key in ("user_id", "session_token", "checkout", "known_credits", "verify_send_error", "auth_mode"):
         st.session_state[key] = None
 
 
@@ -259,43 +296,74 @@ def send_verification_code(user_id: int) -> None:
 
 def render_verify_email(user: auth_service.User) -> None:
     """Schermata mostrata finché l'email non è confermata: il resto dell'app resta bloccato."""
-    st.subheader("Conferma il tuo indirizzo email")
-    st.write(f"Ti abbiamo inviato un codice di 6 cifre a **{user.email}**. Inseriscilo qui sotto per "
-             "iniziare a usare l'app.")
-    if error := st.session_state.get("verify_send_error"):
-        st.error(error)
-    with st.form("verify_form"):
-        code = st.text_input("Codice", max_chars=7, placeholder="123456", key="verify_code")
-        if st.form_submit_button("Conferma", type="primary", use_container_width=True):
-            try:
-                auth_service.verify_email(user.id, code)
-                st.session_state.pending_toast = "Email confermata: benvenuto!"
+    with st.container(border=True):
+        st.subheader("📧 Conferma il tuo indirizzo email")
+        st.write(f"Ti abbiamo inviato un codice di 6 cifre a **{user.email}**. Inseriscilo qui sotto per "
+                 "iniziare a usare l'app.")
+        if error := st.session_state.get("verify_send_error"):
+            st.error(error)
+        with st.form("verify_form", border=False):
+            code = st.text_input("Codice", max_chars=7, placeholder="123456", key="verify_code")
+            if st.form_submit_button("Conferma", type="primary", use_container_width=True):
+                try:
+                    auth_service.verify_email(user.id, code)
+                    st.session_state.pending_toast = "Email confermata: benvenuto!"
+                    st.rerun()
+                except auth_service.AuthError as exc:
+                    st.error(str(exc))
+        st.caption(f"Il codice scade dopo {config.EMAIL_CODE_MINUTES} minuti. Non lo trovi? Controlla anche "
+                   "nella cartella spam.")
+        with st.container(horizontal=True):
+            if st.button("Inviami un nuovo codice", key="verify_resend"):
+                send_verification_code(user.id)
+                if not st.session_state.get("verify_send_error"):
+                    st.session_state.pending_toast = "Nuovo codice inviato."
                 st.rerun()
-            except auth_service.AuthError as exc:
-                st.error(str(exc))
-    st.caption(f"Il codice scade dopo {config.EMAIL_CODE_MINUTES} minuti. Non lo trovi? Controlla anche "
-               "nella cartella spam.")
-    if st.button("Inviami un nuovo codice", key="verify_resend"):
-        send_verification_code(user.id)
-        if not st.session_state.get("verify_send_error"):
-            st.session_state.pending_toast = "Nuovo codice inviato."
-        st.rerun()
+            st.button("Email sbagliata? Esci e registrati di nuovo", key="verify_signout", type="tertiary",
+                      on_click=sign_out)
+
+
+def render_welcome_page() -> None:
+    """Pagina per chi non ha fatto l'accesso: cosa fa l'app, poi accesso o registrazione."""
+    if st.session_state.get("auth_mode") == "reset":
+        st.button("← Torna all'accesso", key="reset_back", type="tertiary",
+                  on_click=lambda: st.session_state.update(auth_mode=None, reset_email_sent=None))
+        with st.container(border=True):
+            st.subheader("🔑 Password dimenticata")
+            render_password_reset()
+        return
+
+    st.markdown("## Il tuo CV su misura per ogni annuncio")
+    st.markdown("Carica il CV una volta: l'AI lo adatta a ogni offerta di lavoro, scrive la lettera di "
+                "presentazione e prepara il tuo profilo LinkedIn.")
+    with st.container(horizontal=True, gap="medium"):
+        for icon, title, text in (("📄", "1. Carica il CV", "PDF o testo, lo riordiniamo noi"),
+                                  ("🎯", "2. Scegli l'annuncio", "CV adattato e lettera pronta"),
+                                  ("💼", "3. LinkedIn", "titolo, Informazioni e post")):
+            with st.container(border=True):
+                st.markdown(f"**{icon} {title}**")
+                st.caption(text)
+    with st.container(border=True):
+        render_auth_forms()
 
 
 def render_auth_forms() -> None:
-    login_tab, register_tab, reset_tab = st.tabs(["Accedi", "Registrati", "Password dimenticata"])
+    login_tab, register_tab = st.tabs(["Accedi", "Crea account"], key="auth_tab")
 
-    with login_tab, st.form("login_form"):
-        email = st.text_input("Email", key="login_email")
-        password = st.text_input("Password", type="password", key="login_password")
-        if st.form_submit_button("Accedi", type="primary", use_container_width=True):
-            try:
-                sign_in(auth_service.login(email, password))
-                st.rerun()
-            except auth_service.AuthError as exc:
-                st.error(str(exc))
+    with login_tab:
+        with st.form("login_form", border=False):
+            email = st.text_input("Email", key="login_email")
+            password = st.text_input("Password", type="password", key="login_password")
+            if st.form_submit_button("Accedi", type="primary", use_container_width=True):
+                try:
+                    sign_in(auth_service.login(email, password))
+                    st.rerun()
+                except auth_service.AuthError as exc:
+                    st.error(str(exc))
+        st.button("Password dimenticata?", key="forgot_password", type="tertiary",
+                  on_click=lambda: st.session_state.update(auth_mode="reset"))
 
-    with register_tab, st.form("register_form"):
+    with register_tab, st.form("register_form", border=False):
         if config.INITIAL_CREDITS:
             st.caption(f"Ogni nuovo account riceve {config.INITIAL_CREDITS} crediti.")
         elif free_mode_enabled():
@@ -318,15 +386,12 @@ def render_auth_forms() -> None:
                 except auth_service.AuthError as exc:
                     st.error(str(exc))
 
-    with reset_tab:
-        render_password_reset()
-
 
 def render_password_reset() -> None:
     """Due passi: richiesta del codice via email, poi codice e nuova password."""
     reset_email = st.session_state.get("reset_email_sent")
     if not reset_email:
-        with st.form("reset_request_form"):
+        with st.form("reset_request_form", border=False):
             st.caption("Ti inviamo per email un codice per scegliere una nuova password.")
             email = st.text_input("Email", key="reset_email")
             if st.form_submit_button("Inviami il codice", type="primary", use_container_width=True):
@@ -340,7 +405,7 @@ def render_password_reset() -> None:
 
     st.caption(f"Se **{reset_email}** è registrata, ti abbiamo inviato un codice di 6 cifre "
                f"(valido {config.EMAIL_CODE_MINUTES} minuti; controlla anche lo spam).")
-    with st.form("reset_form"):
+    with st.form("reset_form", border=False):
         code = st.text_input("Codice", max_chars=7, placeholder="123456", key="reset_code")
         password = st.text_input("Nuova password", type="password", key="reset_password",
                                  help=f"Almeno {auth_service.MIN_PASSWORD_LENGTH} caratteri.")
@@ -351,12 +416,12 @@ def render_password_reset() -> None:
             else:
                 try:
                     sign_in(auth_service.reset_password(reset_email, code, password))
-                    st.session_state.reset_email_sent = None
+                    st.session_state.update(reset_email_sent=None, auth_mode=None)
                     st.session_state.pending_toast = "Password aggiornata."
                     st.rerun()
                 except auth_service.AuthError as exc:
                     st.error(str(exc))
-    if st.button("Usa un'altra email o richiedi un nuovo codice", key="reset_restart", use_container_width=True):
+    if st.button("Usa un'altra email o richiedi un nuovo codice", key="reset_restart", type="tertiary"):
         st.session_state.reset_email_sent = None
         st.rerun()
 
@@ -367,6 +432,12 @@ AI_BENEFITS = (
     "**Scrive la lettera di presentazione** su misura per l'annuncio",
     "**Prepara il profilo LinkedIn**: titolo, sezione Informazioni e post",
 )
+
+
+def credit_cost() -> str:
+    """Costo mostrato sui pulsanti che usano l'AI (gli admin non pagano)."""
+    user = current_user()
+    return "" if user is None or user.is_admin else " · 1 credito"
 
 
 def needs_credits() -> bool:
@@ -405,13 +476,28 @@ def render_buy_credits(user: auth_service.User, key: str = "buy") -> None:
         st.caption("Il pagamento si apre in una nuova scheda: i crediti si attivano qui appena è confermato.")
 
 
-@st.dialog("✨ Sblocca le funzioni AI")
+@st.dialog("🪙 Crediti")
 def buy_dialog() -> None:
     if (user := current_user()) is None:
         return
-    st.markdown("\n".join(f"- {b}" for b in AI_BENEFITS))
-    st.caption("Ogni analisi o generazione con l'AI usa 1 credito.")
+    if user.is_admin:
+        st.success("Sei admin: le funzioni AI non consumano crediti.")
+        return
+    if user.credits:
+        st.markdown(f"Hai **{user.credits} crediti**. Ogni analisi o generazione con l'AI ne usa 1.")
+        st.markdown("**Ricarica crediti**")
+    else:
+        if free_mode_enabled():
+            st.info("**Piano gratuito.** Puoi compilare e sistemare il CV a mano, scegliere lo stile e "
+                    "scaricare il PDF. Le funzioni AI richiedono crediti.")
+        st.markdown("\n".join(f"- {b}" for b in AI_BENEFITS))
+        st.caption("Ogni analisi o generazione con l'AI usa 1 credito. " + price_hook())
     render_buy_credits(user, key="dialog")
+
+
+def open_buy_dialog() -> None:
+    """Callback: la finestra si apre nel corpo dello script (non si può aprire da un'altra finestra o dal menu)."""
+    st.session_state.open_buy = True
 
 
 def render_upsell(title: str, key: str, free_hint: str | None = None) -> None:
@@ -422,7 +508,9 @@ def render_upsell(title: str, key: str, free_hint: str | None = None) -> None:
         if payment_service.payments_enabled():
             st.caption(price_hook())
             if st.button("Acquista crediti", type="primary", use_container_width=True, key=f"{key}_upsell"):
-                buy_dialog()
+                # Rerun completo: chiude un'eventuale finestra aperta e apre quella dei crediti.
+                open_buy_dialog()
+                st.rerun()
         else:
             st.caption("Gli acquisti non sono ancora attivi.")
         if free_hint:
@@ -430,8 +518,8 @@ def render_upsell(title: str, key: str, free_hint: str | None = None) -> None:
 
 
 @st.fragment(run_every=config.CREDITS_REFRESH_SECONDS)
-def render_balance() -> None:
-    """Saldo e acquisto crediti, riletti dal database a intervalli regolari."""
+def render_credit_badge() -> None:
+    """Saldo nella barra in alto, riletto a intervalli regolari per mostrare subito i crediti acquistati."""
     # Pagamento in sospeso: lo si verifica anche direttamente su Stripe, così i crediti
     # arrivano pure se il webhook non è in esecuzione.
     if checkout := st.session_state.get("checkout"):
@@ -450,66 +538,102 @@ def render_balance() -> None:
         st.rerun()
 
     if user.credits:
-        st.info(f"Crediti disponibili: **{user.credits}**")
-        st.caption("Ogni analisi o generazione con l'AI consuma 1 credito.")
-        st.markdown("**Ricarica crediti**")
+        label, kind = f"🪙 {user.credits} credit{'o' if user.credits == 1 else 'i'}", "tertiary"
     else:
-        if free_mode_enabled():
-            st.warning("**Piano gratuito.** Puoi compilare e sistemare il CV a mano, scegliere lo stile e "
-                       "scaricare il PDF. Le funzioni AI richiedono crediti.")
-        else:
-            st.warning("**Non hai crediti.** Acquistane per usare l'app.")
-        st.markdown("**✨ Sblocca le funzioni AI**")
-        st.caption(price_hook())
-    render_buy_credits(user)
+        label, kind = "✨ Acquista crediti", "primary"
+    if st.button(label, type=kind, key="credit_badge", help="Saldo e acquisto crediti"):
+        open_buy_dialog()
+        st.rerun()
 
 
-def render_account(user: auth_service.User) -> None:
-    st.markdown(f"**{user.email}**")
-    if user.is_admin:
-        st.success("Admin · utilizzo illimitato")
-    else:
-        render_balance()
-    st.button("Esci", use_container_width=True, on_click=sign_out, key="logout")
+# --- Barra in alto e menu ☰ ------------------------------------------------------------
+def close_menu() -> None:
+    st.session_state.menu = False
 
 
-def render_sidebar(user: auth_service.User | None) -> str | None:
-    with st.sidebar:
-        st.header("Account")
-        if user is None:
-            render_auth_forms()
-            return None
-        render_account(user)
+def menu_action(action, *args) -> None:
+    """Callback delle voci del menu: esegue l'azione e chiude il menu."""
+    close_menu()
+    action(*args)
+
+
+def show_view(view: str) -> None:
+    st.session_state.view = view
+    request_scroll_top()
+
+
+def menu_item(label: str, key: str, action, *args, current: bool = False) -> None:
+    st.button(f"{label}  ✓" if current else label, key=f"menu_{key}", type="tertiary", use_container_width=True,
+              on_click=menu_action, args=(action, *args))
+
+
+def render_menu(user: auth_service.User) -> None:
+    with st.popover("", icon=":material/menu:", key="menu", on_change="rerun", help="Menu"):
+        st.markdown(f"**{user.email}**" + (" · Admin" if user.is_admin else ""))
+        if not user.email_verified:
+            menu_item("↪️ Esci", "logout", sign_out)
+            return
+        view = st.session_state.view
         st.divider()
-        st.button(
-            "Ricomincia da capo",
-            use_container_width=True,
-            on_click=reset_session,
-            help="Cancella CV, documenti e testi LinkedIn e riparte dal passo 1.",
-        )
+        menu_item("🧭 Percorso guidato", "guided", show_view, GUIDED_VIEW, current=view == GUIDED_VIEW)
+        if user.has_applications_archive:
+            menu_item("📁 Le mie candidature", "archive", show_view, ARCHIVE_VIEW, current=view == ARCHIVE_VIEW)
+        if st.session_state.cv is not None:
+            menu_item("➕ Nuova candidatura (stesso CV)", "new_app", new_application)
         if not user.is_admin:
-            return config.get_env_api_key()
-
-        # La chiave e il modello riguardano chi gestisce l'app, non gli utenti.
+            menu_item("🪙 Crediti e acquisti", "credits", open_buy_dialog)
+        menu_item("🔄 Ricomincia da capo", "restart", lambda: st.session_state.update(open_restart=True))
+        if user.is_admin:
+            menu_item("🛠️ Pannello admin", "admin", show_view, ADMIN_VIEW, current=view == ADMIN_VIEW)
         st.divider()
-        st.header("Impostazioni")
-        typed_key = st.text_input(
-            "Anthropic API Key (facoltativa)",
-            type="password",
-            placeholder="sk-ant-...",
-            help="Se vuota viene usata la variabile d'ambiente ANTHROPIC_API_KEY.",
-        ).strip()
-        api_key = typed_key or config.get_env_api_key()
+        menu_item("↪️ Esci", "logout", sign_out)
 
-        if typed_key:
-            st.success("Chiave inserita manualmente.")
-        elif api_key:
-            st.info("Chiave letta da ANTHROPIC_API_KEY.")
-        else:
-            st.warning("Nessuna API key configurata.")
 
-        st.caption(f"Modello: `{config.CLAUDE_MODEL}`")
-    return api_key
+def render_topbar(user: auth_service.User | None) -> None:
+    """Logo a sinistra; saldo crediti e menu ☰ a destra. Sostituisce la sidebar."""
+    with st.container(key="topbar", horizontal=True, horizontal_alignment="distribute",
+                      vertical_alignment="center", wrap=False):
+        st.markdown(f'<span class="cv-brand">{config.APP_ICON} {config.APP_TITLE}</span>', unsafe_allow_html=True)
+        if user is None:
+            return
+        with st.container(horizontal=True, horizontal_alignment="right", vertical_alignment="center",
+                          wrap=False, width="content"):
+            if user.email_verified:
+                if user.is_admin:
+                    st.caption("Admin · crediti illimitati")
+                else:
+                    render_credit_badge()
+            render_menu(user)
+
+
+@st.dialog("🔄 Ricomincia da capo")
+def restart_dialog() -> None:
+    st.markdown("Cancelli CV, documenti e testi LinkedIn e riparti dal passo 1. Le candidature salvate restano.")
+    with st.container(horizontal=True, horizontal_alignment="right"):
+        if st.button("Annulla", key="restart_cancel"):
+            st.rerun()
+        # Callback: l'azzeramento avviene anche se la finestra non viene ridisegnata.
+        if st.button("Sì, ricomincia", type="primary", key="restart_confirm", on_click=reset_session):
+            st.rerun()
+
+
+def open_pending_dialogs() -> None:
+    """Le finestre richieste dal menu o dai pulsanti si aprono qui, una alla volta."""
+    if st.session_state.pop("open_restart", False):
+        restart_dialog()
+    elif st.session_state.pop("open_buy", False):
+        buy_dialog()
+
+
+def store_admin_api_key() -> None:
+    st.session_state.admin_api_key = st.session_state.admin_api_key_input.strip()
+
+
+def resolve_api_key(user: auth_service.User | None) -> str | None:
+    """Chiave Anthropic: quella scritta dall'admin nel pannello, altrimenti la variabile d'ambiente."""
+    if user is not None and user.is_admin and st.session_state.get("admin_api_key"):
+        return st.session_state.admin_api_key
+    return config.get_env_api_key()
 
 
 def run_claude(api_key: str | None, action: str, spinner_text: str, call):
@@ -520,14 +644,13 @@ def run_claude(api_key: str | None, action: str, spinner_text: str, call):
     """
     user = current_user()
     if user is None:
-        st.error("Accedi dalla barra laterale per usare l'app.")
+        st.error("Accedi per usare l'app.")
         return None
     if not user.is_admin and user.credits < 1:
-        st.error("Hai esaurito i crediti: non puoi avviare nuove analisi o generazioni.")
-        buy_dialog()
+        st.error("Hai esaurito i crediti: acquistane dal pulsante «✨ Acquista crediti» in alto.")
         return None
     if not api_key:
-        st.error("Manca la API key Anthropic: aprila nella barra laterale a sinistra (») oppure impostala nel file .env.")
+        st.error("Manca la API key Anthropic: inseriscila nel Pannello admin oppure impostala nel file .env.")
         return None
     try:
         service = ClaudeCVService(api_key=api_key)
@@ -561,15 +684,30 @@ def render_stepper(current: int) -> None:
 
 
 def render_step_header(step: int, title: str, instructions: str) -> None:
-    if step > 1:
-        st.button(f"← Torna a «{STEP_TITLES[step - 2]}»", key=f"back_{step}", type="tertiary",
-                  on_click=go_to, args=(step - 1,))
     st.markdown(f"### Passo {step} di 3 · {title}")
     st.markdown(instructions)
 
 
-def next_button(label: str, step: int, key: str) -> None:
-    st.button(f"{label} →", key=key, type="primary", use_container_width=True, on_click=go_to, args=(step,))
+def action_bar(hint: str, back: tuple | None = None, forward: tuple | None = None,
+               forward_primary: bool = True, disabled_reason: str | None = None) -> None:
+    """Barra fissa in fondo alla pagina: cosa fare adesso, Indietro e Avanti sempre a portata di mano.
+
+    `back` e `forward` sono tuple (etichetta, callback, *argomenti). Con `disabled_reason`
+    il pulsante Avanti resta visibile ma disattivato, e la riga spiega perché.
+    """
+    with st.bottom, st.container(key="actionbar"):
+        st.markdown(f"👉 **{disabled_reason or hint}**")
+        with st.container(horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"):
+            if back:
+                label, callback, *args = back
+                st.button(f"← {label}", key="bar_back", on_click=callback, args=tuple(args))
+            else:
+                st.space()
+            if forward:
+                label, callback, *args = forward
+                st.button(f"{label} →", key="bar_next", on_click=callback, args=tuple(args),
+                          type="primary" if forward_primary and not disabled_reason else "secondary",
+                          disabled=bool(disabled_reason))
 
 
 def render_resume_review(cv: ResumeData, key: str, on_save) -> None:
@@ -582,53 +720,151 @@ def render_resume_review(cv: ResumeData, key: str, on_save) -> None:
             st.markdown(CV_MARKDOWN_TEMPLATE.render(cv=cv))
 
 
+def plural(n: int, one: str, many: str) -> str:
+    return f"{n} {one if n == 1 else many}"
+
+
 def pdf_file_name(prefix: str, cv: ResumeData) -> str:
     slug = "_".join(cv.full_name.split()) or "cv"
     return f"{prefix}_{slug}.pdf"
 
 
-def render_pdf_downloads(cv: ResumeData, key: str, cover_letter: str | None = None) -> None:
-    """Scelta di stile e lingua dei titoli, poi pulsanti di download PDF."""
-    c1, c2 = st.columns([3, 2])
-    template = c1.selectbox(
-        "Stile del documento",
-        list(TEMPLATES),
-        index=list(TEMPLATES).index("moderno"),
-        format_func=lambda k: TEMPLATES[k].label,
-        key=f"{key}_template",
-    )
+THUMB_WIDTH, PREVIEW_WIDTH = 260, 900
+
+
+@st.cache_data(max_entries=64, show_spinner=False)
+def cv_page_images(cv_json: str, template: str, language: str, width: int) -> list[bytes]:
+    cv = ResumeData.model_validate_json(cv_json)
+    return pdf_page_images(render_cv_pdf(cv, template, language), width)
+
+
+@st.cache_data(max_entries=32, show_spinner=False)
+def letter_page_images(cv_json: str, letter: str, template: str, language: str) -> list[bytes]:
+    cv = ResumeData.model_validate_json(cv_json)
+    return pdf_page_images(render_cover_letter_pdf(cv, letter, template, language), PREVIEW_WIDTH)
+
+
+def choose_template(key: str, template: str) -> None:
+    st.session_state[f"{key}_tpl"] = template
+
+
+def render_template_gallery(cv: ResumeData, key: str, language: str) -> str:
+    """Prima pagina del CV in ognuno degli stili: si sceglie lo stile guardandolo. Restituisce lo stile scelto."""
+    selected = st.session_state.setdefault(f"{key}_tpl", "moderno")
+    cv_json = cv.model_dump_json()
+    with st.spinner("Preparo le anteprime..."), st.container(horizontal=True, gap="small"):
+        for template, tpl in TEMPLATES.items():
+            with st.container(border=True, width=170, gap="small"):
+                st.image(cv_page_images(cv_json, template, language, THUMB_WIDTH)[0], width="stretch")
+                st.button(f"✓ {tpl.label}" if template == selected else tpl.label, key=f"{key}_pick_{template}",
+                          disabled=template == selected, use_container_width=True,
+                          on_click=choose_template, args=(key, template))
+    return selected
+
+
+def render_pages(images: list[bytes]) -> None:
+    for i, image in enumerate(images, start=1):
+        st.image(image, caption=f"Pagina {i} di {len(images)}" if len(images) > 1 else None,
+                 width="stretch")
+
+
+LANGUAGE_NAMES = {"it": "italiano", "en": "inglese"}
+
+
+def translation_key(cv: ResumeData, cover_letter: str | None, language: str) -> str:
+    """Impronta di contenuto e lingua: se CV o lettera cambiano, la traduzione va rifatta."""
+    raw = f"{language}\n{cv.model_dump_json()}\n{cover_letter or ''}"
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def documents_in_language(cv: ResumeData, cover_letter: str | None, key: str,
+                          language: str) -> tuple[ResumeData, str | None]:
+    """CV e lettera nella lingua scelta: gli originali, la traduzione già fatta o la proposta di tradurli."""
+    source = guess_language(cv.professional_summary, *(h for e in cv.experiences for h in e.highlights),
+                            cover_letter or "")
+    if language == source:
+        return cv, cover_letter
+    translations = st.session_state.setdefault("translations", {})
+    fingerprint = translation_key(cv, cover_letter, language)
+    if fingerprint in translations:
+        translated_cv, translated_letter = translations[fingerprint]
+        st.caption(f"🌍 Testi tradotti in {LANGUAGE_NAMES[language]} con l'AI. Se correggi CV o lettera, "
+                   "la traduzione va rifatta.")
+        return ResumeData.model_validate_json(translated_cv), translated_letter
+
+    what = "CV e lettera" if cover_letter else "il CV"
+    with st.container(border=True):
+        st.markdown(f"**Il testo è in {LANGUAGE_NAMES[source]}.** Per avere {what} in {LANGUAGE_NAMES[language]} "
+                    "li traduciamo con l'AI; nel frattempo l'anteprima mostra i titoli nella nuova lingua "
+                    "e il testo originale.")
+        if needs_credits():
+            st.caption("La traduzione richiede crediti.")
+            st.button("✨ Acquista crediti", key=f"{key}_translate_buy", on_click=open_buy_dialog)
+        elif st.button(f"🌍 Traduci {what} in {LANGUAGE_NAMES[language]}{credit_cost()}", type="primary",
+                       key=f"{key}_translate"):
+            result = run_claude(
+                resolve_api_key(current_user()), "Traduzione",
+                f"Sto traducendo {what} in {LANGUAGE_NAMES[language]}...",
+                lambda s: s.translate_documents(cv, cover_letter, LANGUAGE_NAMES[language]),
+            )
+            if result is not None:
+                translations[fingerprint] = (result.cv.model_dump_json(), result.cover_letter)
+                st.rerun()
+    return cv, cover_letter
+
+
+def render_pdf_downloads(cv: ResumeData, key: str, cover_letter: str | None = None, preview: bool = True) -> None:
+    """Lingua, stile, download PDF e, con `preview`, anteprima dei documenti impaginati."""
     default_lang = guess_language(cv.professional_summary, *(h for e in cv.experiences for h in e.highlights))
-    language = c2.selectbox(
-        "Lingua dei titoli",
-        list(LANGUAGES),
-        index=list(LANGUAGES).index(default_lang),
-        format_func=LANGUAGES.get,
-        key=f"{key}_language",
-        help="Lingua dei titoli delle sezioni («Esperienza» / «Experience»). Usa la stessa lingua del CV.",
+    language = st.segmented_control(
+        "Lingua del documento", list(LANGUAGES), default=default_lang, format_func=LANGUAGES.get,
+        key=f"{key}_language", required=True,
+        help="Lingua di titoli e testi. Se scegli una lingua diversa da quella del CV, puoi farlo tradurre.",
     )
-    st.caption(f"{TEMPLATES[template].description} Tutti gli stili sono leggibili dai sistemi ATS.")
+    cv, cover_letter = documents_in_language(cv, cover_letter, key, language)
+    if preview:
+        st.markdown("**Scegli lo stile** guardando l'anteprima:")
+        template = render_template_gallery(cv, key, language)
+    else:
+        template = st.selectbox("Stile del documento", list(TEMPLATES), key=f"{key}_tpl",
+                                index=list(TEMPLATES).index("moderno"), format_func=lambda k: TEMPLATES[k].label)
+    tpl = TEMPLATES[template]
+    ats = ("Leggibile da tutti i sistemi ATS." if tpl.ats_friendly else
+           "Stile grafico: alcuni sistemi ATS di selezione automatica lo leggono peggio di uno stile a colonna "
+           "singola. Se ti candidi tramite portali, preferisci Classico, Moderno, Tecnico o Executive.")
+    st.caption(f"**{tpl.label}**: {tpl.description} {ats}")
 
     # PDF generati solo al clic: l'archivio candidature mostra molti pulsanti per pagina.
-    d1, d2 = st.columns(2)
-    d1.download_button(
-        "📥 Scarica il CV (PDF)",
-        data=lambda: render_cv_pdf(cv, template, language),
-        file_name=pdf_file_name("CV", cv),
-        mime="application/pdf",
-        type="primary",
-        use_container_width=True,
-        key=f"{key}_cv_pdf",
-    )
-    if cover_letter:
-        d2.download_button(
-            "📥 Scarica la lettera (PDF)",
-            data=lambda: render_cover_letter_pdf(cv, cover_letter, template, language),
-            file_name=pdf_file_name("Lettera", cv),
+    with st.container(horizontal=True):
+        st.download_button(
+            "📥 Scarica il CV (PDF)",
+            data=lambda: render_cv_pdf(cv, template, language),
+            file_name=pdf_file_name("CV", cv),
             mime="application/pdf",
-            type="primary",
-            use_container_width=True,
-            key=f"{key}_letter_pdf",
+            key=f"{key}_cv_pdf",
         )
+        if cover_letter:
+            st.download_button(
+                "📥 Scarica la lettera (PDF)",
+                data=lambda: render_cover_letter_pdf(cv, cover_letter, template, language),
+                file_name=pdf_file_name("Lettera" if language == "it" else "Cover_letter", cv),
+                mime="application/pdf",
+                key=f"{key}_letter_pdf",
+            )
+
+    if not preview:
+        return
+    st.markdown(f"**Anteprima · stile {tpl.label}**")
+    cv_json = cv.model_dump_json()
+    with st.spinner("Preparo l'anteprima..."):
+        if cover_letter:
+            cv_tab, letter_tab = st.tabs(["📄 CV", "✉️ Lettera"], key=f"{key}_preview_tab")
+            with cv_tab:
+                render_pages(cv_page_images(cv_json, template, language, PREVIEW_WIDTH))
+            with letter_tab:
+                render_pages(letter_page_images(cv_json, cover_letter, template, language))
+        else:
+            render_pages(cv_page_images(cv_json, template, language, PREVIEW_WIDTH))
 
 
 def render_keywords(title: str, keywords: list[str], color: str) -> None:
@@ -664,6 +900,7 @@ def set_new_cv(cv: ResumeData, source_text: str | None = None) -> None:
     st.session_state.linkedin = None
     st.session_state.job_skipped = False
     bump("base")
+    request_scroll_top()
 
 
 def draft_cv_from_text(text: str) -> ResumeData:
@@ -737,7 +974,7 @@ def render_cv_input(api_key: str | None, key: str) -> None:
             "Testo del CV", height=250, key=f"{key}_text", label_visibility="collapsed",
             placeholder="Incolla qui il testo del tuo CV...",
         )
-    clicked = st.button("Leggi il mio CV", type="primary", use_container_width=True, key=f"{key}_go")
+    clicked = st.button(f"Leggi il mio CV{credit_cost()}", type="primary", use_container_width=True, key=f"{key}_go")
     st.caption("Di solito ci vuole meno di un minuto.")
     if not clicked:
         return
@@ -771,41 +1008,49 @@ def render_step_cv(api_key: str | None) -> None:
             "di selezione automatica dei candidati (ATS).",
         )
         render_cv_input(api_key, key="cv_input")
+        action_bar("Carica il tuo CV per iniziare", forward=("Avanti: offerta di lavoro", go_to, 2),
+                   disabled_reason="Carica il CV per andare avanti")
         return
 
     source_text = st.session_state.get("cv_source_text")
     if source_text is None:
-        render_step_header(1, "Controlla il tuo CV", "Ecco cosa abbiamo letto. Controlla che sia tutto giusto, poi vai avanti.")
+        render_step_header(1, "Controlla il tuo CV", "Ecco cosa abbiamo letto. Se è tutto giusto, vai avanti.")
         skills = len(cv.hard_skills) + len(cv.soft_skills)
-        st.success(
-            f"**CV di {cv.full_name} letto correttamente**: {len(cv.experiences)} esperienze, "
-            f"{len(cv.education)} titoli di studio, {skills} competenze."
-        )
+        with st.container(border=True):
+            st.markdown(f"✅ **{cv.full_name or 'Il tuo CV'}** · "
+                        f"{plural(len(cv.experiences), 'esperienza', 'esperienze')} · "
+                        f"{plural(len(cv.education), 'titolo di studio', 'titoli di studio')} · "
+                        f"{plural(skills, 'competenza', 'competenze')}")
     else:
-        render_step_header(1, "Compila il tuo CV", "Completa i campi del modulo, poi scegli lo stile e scarica il PDF.")
+        render_step_header(1, "Compila il tuo CV", "Completa i campi del modulo; quando hai finito vai avanti.")
         if source_text:
             with st.expander("📄 Testo del CV che hai caricato (da copiare nei campi)"):
                 st.code(source_text, language=None, wrap_lines=True)
-    with st.expander("👀 Guarda e correggi il CV", expanded=source_text is not None):
+    with st.expander("👀 Vedi e correggi il CV", expanded=source_text is not None):
         st.caption("Le correzioni valgono anche per i passi successivi.")
         render_resume_review(cv, key="base", on_save=lambda edited: st.session_state.update(cv=edited))
-    with st.expander("📥 Scarica questo CV in PDF", expanded=source_text is not None):
+
+    with st.container(border=True):
+        st.markdown("#### 📄 Il tuo CV impaginato")
         render_pdf_downloads(cv, key="base")
+
+    with st.container(horizontal=True, vertical_alignment="center"):
         st.download_button(
-            "💾 Salva il CV per modificarlo in seguito (JSON)", data=cv.model_dump_json(indent=2),
+            "💾 Salva il CV per riprenderlo in seguito (JSON)", data=cv.model_dump_json(indent=2),
             file_name=pdf_file_name("CV", cv).replace(".pdf", ".json"), mime="application/json", key="base_json",
+            type="tertiary", help="Il file JSON si può ricaricare in questa app per riprendere il CV da dove l'hai lasciato.",
         )
-        st.caption("Il file JSON si può ricaricare in questa app per riprendere il CV da dove l'hai lasciato.")
+        if st.button("🔄 Usa un altro CV", type="tertiary", key="cv_replace"):
+            replace_cv_dialog(api_key)
 
-    if needs_credits():
-        render_upsell("Il CV è pronto: ora candidati con l'AI", key="cv_next")
+    action_bar("Tutto giusto? Ora scegli l'annuncio di lavoro",
+               forward=("Avanti: offerta di lavoro", go_to, 2))
 
-    next_button("Avanti: scegli l'offerta di lavoro", 2, key="next_1")
 
-    st.write("")
-    with st.expander("🔄 Vuoi usare un altro CV?"):
-        st.caption("Il nuovo CV sostituisce quello attuale e tutto ciò che è stato preparato dopo.")
-        render_cv_input(api_key, key="cv_reupload")
+@st.dialog("🔄 Usa un altro CV", width="large")
+def replace_cv_dialog(api_key: str | None) -> None:
+    st.caption("Il nuovo CV sostituisce quello attuale e tutto ciò che è stato preparato dopo.")
+    render_cv_input(api_key, key="cv_reupload")
 
 
 # --- Passo 2: offerta di lavoro ------------------------------------------------------------
@@ -827,7 +1072,7 @@ def render_job_input(api_key: str | None, cv: ResumeData, key: str) -> None:
         job_text = st.text_area(
             "Testo dell'annuncio", height=250, key=f"{key}_text", placeholder="Incolla qui il testo dell'annuncio..."
         )
-    clicked = st.button("Prepara CV e lettera per questo annuncio", type="primary", use_container_width=True,
+    clicked = st.button(f"Prepara CV e lettera{credit_cost()}", type="primary", use_container_width=True,
                         key=f"{key}_go")
     st.caption("Di solito ci vogliono uno o due minuti.")
     if not clicked:
@@ -868,8 +1113,10 @@ def render_job_input(api_key: str | None, cv: ResumeData, key: str) -> None:
         st.session_state.match_prev = None
         st.session_state.job_text = job_text
         st.session_state.job_skipped = False
+        st.session_state.job_tab_reset = True
         bump("tailored")
         bump("letter")
+        request_scroll_top()
         st.rerun()
 
 
@@ -963,29 +1210,54 @@ def render_step_job(api_key: str | None) -> None:
         )
         if needs_credits():
             render_upsell("Adatta il CV all'annuncio e ricevi la lettera", key="job")
+            hint = "Acquista crediti per adattare il CV, oppure salta e vai al profilo LinkedIn"
         else:
             render_job_input(api_key, cv, key="job_input")
-        st.divider()
-        st.markdown("**Non hai ancora un annuncio?** Puoi saltare questo passo e preparare subito il profilo LinkedIn.")
-        st.button("Salta e vai al profilo LinkedIn", key="skip_job", on_click=skip_job)
+            hint = "Indica l'annuncio e premi «Prepara CV e lettera». Non ce l'hai ancora? Puoi saltare"
+        action_bar(hint,
+                   back=("Il tuo CV", go_to, 1), forward=("Salta: vai a LinkedIn", skip_job),
+                   forward_primary=False)
         return
 
     render_step_header(
         2, "Il CV adattato e la lettera",
-        "Ecco i documenti per questa candidatura. Controllali, correggi se serve e scaricali.",
+        "Ecco i documenti per questa candidatura: controllali, correggili se serve e scaricali.",
     )
-    st.success(f"**Il tuo CV corrisponde all'annuncio al {match.match_score}%.** {score_comment(match.match_score)}")
-    st.progress(match.match_score / 100)
+    reopened = (st.session_state.get("saved_app_id") is not None
+                and st.session_state.get("reopened_app_id") == st.session_state.get("saved_app_id"))
+    if reopened:
+        st.info("**Candidatura riaperta dall'archivio.** Correggi CV e lettera nelle schede qui sotto, oppure "
+                "chiedi all'AI cosa cambiare. Ogni modifica viene salvata nella candidatura.")
 
-    with st.expander("🔑 Cosa chiede l'annuncio e cosa manca nel tuo CV"):
-        render_keywords("Già presenti nel tuo CV", match.matching_keywords, "green")
-        render_keywords("Mancanti nel tuo CV", match.missing_keywords, "red")
-        st.caption(
-            "Le competenze mancanti non vengono aggiunte in automatico. Se le hai davvero, aggiungile al CV "
-            "adattato con «Voglio correggere o aggiungere qualcosa»."
-        )
+    with st.container(border=True):
+        st.markdown(f"**Compatibilità con l'annuncio: {match.match_score}%** · {score_comment(match.match_score)}")
+        st.progress(match.match_score / 100)
+        with st.expander("🔑 Cosa chiede l'annuncio e cosa manca nel tuo CV"):
+            render_keywords("Già presenti nel tuo CV", match.matching_keywords, "green")
+            render_keywords("Mancanti nel tuo CV", match.missing_keywords, "red")
+            st.caption(
+                "Le competenze mancanti non vengono aggiunte in automatico. Se le hai davvero, aggiungile al CV "
+                "adattato nella scheda «Correggi il CV»."
+            )
 
-    with st.expander("✉️ Lettera di presentazione"):
+    with st.container(border=True):
+        st.markdown("#### 📥 I tuoi documenti")
+        render_pdf_downloads(match.tailored_cv, key="tailored", cover_letter=match.cover_letter)
+        with st.container(horizontal=True):
+            if archive_enabled():
+                render_save_application(match)
+            with st.popover("Altri formati"):
+                st.download_button("Lettera (.txt)", data=match.cover_letter, file_name="lettera_presentazione.txt")
+                st.download_button("CV (Markdown)", data=CV_MARKDOWN_TEMPLATE.render(cv=match.tailored_cv),
+                                   file_name="cv_adattato.md", mime="text/markdown")
+                st.download_button("CV (JSON)", data=match.tailored_cv.model_dump_json(indent=2),
+                                   file_name="cv_adattato.json", mime="application/json")
+
+    # Scheda aperta gestita da session_state: dopo una nuova generazione si torna sulla lettera.
+    if st.session_state.pop("job_tab_reset", False) or st.session_state.get("job_tab") not in JOB_TABS:
+        st.session_state.job_tab = JOB_TABS[0]
+    letter_tab, cv_tab, ai_tab = st.tabs(JOB_TABS, key="job_tab")
+    with letter_tab:
         toggle_key = "letter_edit_toggle"
         if edit_toggle("✏️ Voglio correggere qualcosa", toggle_key):
             st.caption("Lascia una riga vuota tra un paragrafo e l'altro.")
@@ -997,47 +1269,37 @@ def render_step_job(api_key: str | None) -> None:
                 st.rerun()
         else:
             st.code(match.cover_letter, language=None, wrap_lines=True)
-
-    with st.expander("📄 CV adattato all'annuncio"):
+    with cv_tab:
         render_resume_review(
             match.tailored_cv, key="tailored",
             on_save=lambda edited: st.session_state.update(
                 match=st.session_state.match.model_copy(update={"tailored_cv": edited})
             ),
         )
-
-    if changes := st.session_state.pop("revise_changes", None):
-        st.success("**Modifica applicata.** Riapri CV e lettera per controllarli.\n\n"
-                   + "\n".join(f"- {c}" for c in changes))
-    if st.session_state.match_prev is not None:
-        st.button("↩️ Annulla l'ultima modifica dell'AI", key="revise_undo", on_click=undo_revision)
-    # Valore stabile tra un rerun e l'altro: se `expanded` cambiasse, l'expander si richiuderebbe mentre si scrive.
-    reopened = st.session_state.get("saved_app_id") is not None and         st.session_state.get("reopened_app_id") == st.session_state.get("saved_app_id")
-    if reopened:
-        st.info("**Candidatura riaperta dall'archivio.** Correggi CV e lettera qui sopra, oppure scrivi all'AI "
-                "cosa cambiare qui sotto. Ogni modifica viene salvata nella candidatura.")
-    with st.expander("🤖 Chiedi all'AI di modificare CV e lettera", expanded=reopened):
+    with ai_tab:
+        if changes := st.session_state.pop("revise_changes", None):
+            st.success("**Modifica applicata.** Guarda il risultato nell’anteprima qui sopra.\n\n"
+                       + "\n".join(f"- {c}" for c in changes))
+        if st.session_state.match_prev is not None:
+            st.button("↩️ Annulla l'ultima modifica dell'AI", key="revise_undo", on_click=undo_revision)
         render_ai_revision(api_key, cv, match)
 
-    if archive_enabled():
-        st.markdown("#### 💾 Salva la candidatura")
-        render_save_application(match)
+    if st.button("🔄 Prova con un altro annuncio", type="tertiary", key="job_replace"):
+        replace_job_dialog(api_key, cv)
 
-    st.markdown("#### 📥 Scarica i documenti")
-    render_pdf_downloads(match.tailored_cv, key="tailored", cover_letter=match.cover_letter)
-    with st.expander("Altri formati (testo, Markdown, JSON)"):
-        st.download_button("Lettera (.txt)", data=match.cover_letter, file_name="lettera_presentazione.txt")
-        st.download_button("CV (Markdown)", data=CV_MARKDOWN_TEMPLATE.render(cv=match.tailored_cv),
-                           file_name="cv_adattato.md", mime="text/markdown")
-        st.download_button("CV (JSON)", data=match.tailored_cv.model_dump_json(indent=2),
-                           file_name="cv_adattato.json", mime="application/json")
+    action_bar("Scarica i documenti, poi prepara il profilo LinkedIn",
+               back=("Il tuo CV", go_to, 1), forward=("Avanti: profilo LinkedIn", go_to, 3))
 
-    st.divider()
-    next_button("Avanti: prepara il profilo LinkedIn", 3, key="next_2")
 
-    st.write("")
-    with st.expander("🔄 Vuoi provare con un altro annuncio?"):
-        st.caption("Il nuovo annuncio sostituisce CV adattato e lettera attuali: scaricali prima se ti servono.")
+JOB_TABS = ("✏️ Correggi la lettera", "✏️ Correggi il CV", "🤖 Modifica con l'AI")
+
+
+@st.dialog("🔄 Prova con un altro annuncio", width="large")
+def replace_job_dialog(api_key: str | None, cv: ResumeData) -> None:
+    st.caption("Il nuovo annuncio sostituisce CV adattato e lettera attuali: scaricali prima se ti servono.")
+    if needs_credits():
+        render_upsell("Adatta il CV all'annuncio e ricevi la lettera", key="job_dialog")
+    else:
         render_job_input(api_key, cv, key="job_reinput")
 
 
@@ -1050,7 +1312,7 @@ def render_linkedin_input(api_key: str | None, cv: ResumeData, key: str) -> None
         if st.checkbox(f"**{label}**: {TONE_DESCRIPTIONS[tone]}", value=tone in ("risultati", "diplomatico"),
                        key=f"{key}_{tone}")
     ]
-    clicked = st.button("Scrivi i testi LinkedIn", type="primary", use_container_width=True,
+    clicked = st.button(f"Scrivi i testi LinkedIn{credit_cost()}", type="primary", use_container_width=True,
                         disabled=not tones, key=f"{key}_go")
     st.caption("Le versioni vengono scritte in contemporanea: di solito ci vuole circa un minuto.")
     if not clicked:
@@ -1066,12 +1328,14 @@ def render_linkedin_input(api_key: str | None, cv: ResumeData, key: str) -> None
         st.session_state.linkedin = versions
         for tone in versions:
             bump(f"linkedin_{tone}")
+        request_scroll_top()
         st.rerun()
 
 
 def render_step_linkedin(api_key: str | None) -> None:
     cv: ResumeData = st.session_state.cv
     versions: dict[str, LinkedInContent] | None = st.session_state.linkedin
+    back = ("Offerta di lavoro", go_to, 2)
     if not versions:
         render_step_header(
             3, "Prepara il profilo LinkedIn",
@@ -1083,16 +1347,20 @@ def render_step_linkedin(api_key: str | None) -> None:
             render_upsell("Fatti scrivere il profilo LinkedIn", key="li")
         else:
             render_linkedin_input(api_key, cv, key="li_input")
+        action_bar("Acquista crediti per farti scrivere i testi LinkedIn" if needs_credits()
+                   else "Scegli le versioni e premi «Scrivi i testi LinkedIn»", back=back)
         return
 
     render_step_header(
         3, "Il tuo profilo LinkedIn",
         "Copia ogni testo con l'icona 📋 in alto a destra del riquadro e incollalo nel tuo profilo LinkedIn.",
     )
-    if (saved := current_saved_application()) is not None:
-        st.caption(f"💾 Questi testi sono salvati anche nella candidatura «{saved.title}».")
-    if len(versions) > 1:
-        st.info("Hai più versioni: passa dall'una all'altra con le schede qui sotto.")
+    with st.container(border=True):
+        done = ["✓ CV"] + (["✓ Candidatura"] if st.session_state.match is not None else []) + ["✓ LinkedIn"]
+        st.markdown(f"🎉 **Hai finito!** {' · '.join(done)}")
+        st.caption("Per un altro annuncio usa «Nuova candidatura»: il CV e i testi LinkedIn restano.")
+        if (saved := current_saved_application()) is not None:
+            st.caption(f"💾 Questi testi sono salvati anche nella candidatura «{saved.title}».")
 
     tabs = st.tabs([f"Versione «{LINKEDIN_TONES[t][0]}»" for t in versions])
     for tab, (tone, content) in zip(tabs, versions.items()):
@@ -1111,18 +1379,14 @@ def render_step_linkedin(api_key: str | None) -> None:
             render_copy_block("Informazioni (sezione «About»)", content.about_section, limit=2600)
             render_copy_block("Post da pubblicare", content.launch_post)
 
-    st.divider()
-    st.success("🎉 **Hai finito!** Hai il CV, i documenti per la candidatura e i testi per LinkedIn.")
     with st.expander("🔄 Vuoi altre versioni dei testi LinkedIn?"):
         st.caption("Le nuove versioni sostituiscono quelle attuali.")
         render_linkedin_input(api_key, cv, key="li_reinput")
-    st.button("Ricomincia con un nuovo CV", key="restart", on_click=reset_session)
+    action_bar("Hai tutto: candidati a un altro annuncio con lo stesso CV", back=back,
+               forward=("➕ Nuova candidatura", new_application))
 
 
 # --- Le mie candidature ----------------------------------------------------------------
-GUIDED_VIEW, ARCHIVE_VIEW, ADMIN_VIEW = "🧭 Percorso guidato", "📁 Le mie candidature", "🛠️ Pannello Admin"
-
-
 def app_store() -> applications_service.ApplicationStore:
     """Archivio dell'utente collegato: ogni lettura e scrittura è limitata alle sue candidature."""
     return applications_service.ApplicationStore(st.session_state.user_id)
@@ -1166,24 +1430,24 @@ def sync_saved_application() -> None:
 
 def render_save_application(match: JobMatchResult) -> None:
     if (saved := current_saved_application()) is not None:
-        st.success(f"Salvata in «📁 Le mie candidature» come **{saved.title}**. Le modifiche che fai qui e i "
-                   "testi LinkedIn del passo 3 vengono aggiunti in automatico.")
+        st.caption(f"💾 Salvata in «Le mie candidature» come **{saved.title}**: le modifiche e i testi LinkedIn "
+                   "si aggiungono da soli.")
         return
-    st.caption("Ritroverai CV, lettera e testi LinkedIn in «📁 Le mie candidature», senza usare di nuovo l'AI.")
-    with st.form("save_application_form"):
-        c1, c2 = st.columns(2)
-        company = c1.text_input("Azienda", placeholder="es. Generali")
-        role = c2.text_input("Ruolo", placeholder="es. QA Specialist")
-        if st.form_submit_button("💾 Salva nelle mie candidature", type="primary", use_container_width=True):
-            if not (company.strip() and role.strip()):
-                st.warning("Indica sia l'azienda sia il ruolo.")
-                return
-            st.session_state.saved_app_id = app_store().save(
-                company, role, match, st.session_state.cv, st.session_state.job_text, st.session_state.linkedin,
-            )
-            st.session_state.saved_app_fingerprint = saved_fingerprint()
-            st.session_state.pending_toast = f"Candidatura «{company.strip()} - {role.strip()}» salvata."
-            st.rerun()
+    with st.popover("💾 Salva nelle candidature"):
+        st.caption("Ritroverai CV, lettera e testi LinkedIn in «📁 Le mie candidature», senza usare di nuovo l'AI.")
+        with st.form("save_application_form", border=False):
+            company = st.text_input("Azienda", placeholder="es. Generali")
+            role = st.text_input("Ruolo", placeholder="es. QA Specialist")
+            if st.form_submit_button("Salva", use_container_width=True):
+                if not (company.strip() and role.strip()):
+                    st.warning("Indica sia l'azienda sia il ruolo.")
+                    return
+                st.session_state.saved_app_id = app_store().save(
+                    company, role, match, st.session_state.cv, st.session_state.job_text, st.session_state.linkedin,
+                )
+                st.session_state.saved_app_fingerprint = saved_fingerprint()
+                st.session_state.pending_toast = f"Candidatura «{company.strip()} - {role.strip()}» salvata."
+                st.rerun()
 
 
 def format_date(timestamp: str) -> str:
@@ -1211,7 +1475,9 @@ def reopen_application(app_id: int) -> None:
     st.session_state.saved_app_id = app.id
     st.session_state.saved_app_fingerprint = saved_fingerprint()
     st.session_state.step = 2
-    st.session_state.main_view = GUIDED_VIEW
+    st.session_state.view = GUIDED_VIEW
+    st.session_state.job_tab = JOB_TABS[2]
+    request_scroll_top()
     for key in ("base", "tailored", "letter", "revise", *(f"linkedin_{tone}" for tone in app.linkedin)):
         bump(key)
     st.session_state.pending_toast = f"Candidatura «{app.title}» riaperta."
@@ -1226,7 +1492,7 @@ def render_saved_application(app: applications_service.SavedApplication) -> None
             st.caption("Sostituisce il lavoro aperto ora nel percorso guidato.")
         st.button("Riapri e modifica", type="primary", key=f"saved_{app.id}_reopen",
                   on_click=reopen_application, args=(app.id,))
-    render_pdf_downloads(app.cv, key=f"saved_{app.id}", cover_letter=app.cover_letter)
+    render_pdf_downloads(app.cv, key=f"saved_{app.id}", cover_letter=app.cover_letter, preview=False)
     cv_tab, letter_tab, linkedin_tab = st.tabs(["📄 CV adattato", "✉️ Lettera", "💼 LinkedIn"])
     with cv_tab, st.container(border=True):
         st.markdown(CV_MARKDOWN_TEMPLATE.render(cv=app.cv))
@@ -1286,6 +1552,43 @@ def render_credit_form() -> None:
                     st.error(str(exc))
 
 
+def render_account_admin(current: auth_service.User) -> None:
+    """Password forzata ed eliminazione di un account."""
+    st.markdown("#### Gestione account")
+    password_tab, delete_tab = st.tabs(["Imposta una nuova password", "Elimina un account"])
+
+    with password_tab, st.form("admin_password_form", clear_on_submit=True):
+        st.caption("La password dell'utente viene sostituita e gli accessi aperti sui suoi dispositivi vengono chiusi. "
+                   "Comunicagli tu la nuova password.")
+        email = st.text_input("Email dell'utente", key="admin_pw_email")
+        password = st.text_input("Nuova password", type="password", key="admin_pw_new",
+                                 help=f"Almeno {auth_service.MIN_PASSWORD_LENGTH} caratteri.")
+        if st.form_submit_button("Imposta la password", type="primary"):
+            try:
+                auth_service.set_password(email, password)
+                st.success(f"Password di {email.strip().lower()} aggiornata.")
+            except auth_service.AuthError as exc:
+                st.error(str(exc))
+
+    with delete_tab, st.form("admin_delete_form", clear_on_submit=True):
+        st.caption("Elimina l'account con i crediti residui e le candidature salvate. Non si può annullare. "
+                   "Pagamenti e statistiche restano nei totali.")
+        email = st.text_input("Email dell'utente", key="admin_del_email")
+        confirm = st.text_input("Riscrivi l'email per confermare", key="admin_del_confirm")
+        if st.form_submit_button("Elimina l'account", type="primary"):
+            email, confirm = email.strip().lower(), confirm.strip().lower()
+            if not email or email != confirm:
+                st.error("Le due email non coincidono.")
+            elif email == current.email:
+                st.error("Non puoi eliminare il tuo stesso account.")
+            else:
+                try:
+                    auth_service.delete_user(email)
+                    st.success(f"Account {email} eliminato.")
+                except auth_service.AuthError as exc:
+                    st.error(str(exc))
+
+
 def render_admin_panel() -> None:
     st.markdown("### Pannello Admin")
     usage = auth_service.usage_stats()
@@ -1312,9 +1615,23 @@ def render_admin_panel() -> None:
         auth_service.set_flag(auth_service.FLAG_FREE_MANUAL_MODE, free_mode)
         st.toast("Uso gratuito senza AI " + ("attivato." if free_mode else "disattivato."))
 
+    # Chiave e modello riguardano chi gestisce l'app, non gli utenti.
+    st.text_input(
+        "Anthropic API Key (facoltativa)", type="password", placeholder="sk-ant-...",
+        value=st.session_state.get("admin_api_key", ""), key="admin_api_key_input", on_change=store_admin_api_key,
+        help="Vale solo per la tua sessione. Se vuota viene usata la variabile d'ambiente ANTHROPIC_API_KEY.",
+    )
+    if st.session_state.get("admin_api_key"):
+        st.caption(f"Chiave inserita manualmente · modello `{config.CLAUDE_MODEL}`")
+    elif config.get_env_api_key():
+        st.caption(f"Chiave letta da ANTHROPIC_API_KEY · modello `{config.CLAUDE_MODEL}`")
+    else:
+        st.warning("Nessuna API key configurata.")
+
     st.divider()
     # Il form va prima della tabella, così dopo una modifica la tabella mostra già il nuovo saldo.
     render_credit_form()
+    render_account_admin(current_user())
 
     st.markdown("#### Utenti registrati")
     users = auth_service.users_overview()
@@ -1354,48 +1671,62 @@ def render_admin_panel() -> None:
 STEP_RENDERERS = (render_step_cv, render_step_job, render_step_linkedin)
 
 
+def render_payment_return(payment: str) -> bool:
+    """Ritorno da Stripe, che si apre in una nuova scheda. True se la pagina deve fermarsi qui.
+
+    In una scheda nuova non c'è il lavoro in corso: si invita a tornare alla scheda di partenza
+    invece di ripartire da zero. Se la sessione ha già un CV basta un avviso.
+    """
+    if payment == "success":
+        text = ("**Pagamento completato.** I crediti sono già sul tuo account: torna alla scheda di "
+                f"{config.APP_TITLE} in cui stavi lavorando, oppure continua da qui.")
+    else:
+        text = "**Pagamento annullato:** non ti è stato addebitato nulla."
+    if st.session_state.cv is not None:
+        st.toast(text.replace("**", ""), icon="✅" if payment == "success" else "ℹ️")
+        return False
+    with st.container(border=True):
+        st.markdown(text)
+        st.button("Continua da qui", type="primary", key="payment_continue")
+    return True
+
+
 def main() -> None:
     auth_service.init_db()
     applications_service.init_db()
     init_state()
     restore_login()
-    emit_cookie_script()
-    if toast := st.session_state.pop("pending_toast", None):
-        st.toast(toast, icon="✅")
     user = current_user()
-    api_key = render_sidebar(user)
 
     st.markdown(STEPPER_CSS, unsafe_allow_html=True)
-    st.title(f"{config.APP_ICON} {config.APP_TITLE}")
-    st.caption("In tre passi: carica il CV, scegli un'offerta di lavoro, prepara il profilo LinkedIn.")
-    # Ritorno dalla pagina di pagamento Stripe (si apre in una nuova scheda).
+    render_topbar(user)
+    emit_cookie_script()
+    emit_scroll_script()
+    if toast := st.session_state.pop("pending_toast", None):
+        st.toast(toast, icon="✅")
+    api_key = resolve_api_key(user)
+
     payment = st.query_params.pop("payment", None)
-    if payment == "success":
-        st.success("**Pagamento completato.** I crediti compaiono nella barra laterale della scheda in cui hai "
-                   "acquistato entro pochi secondi: puoi chiudere questa scheda.")
-    elif payment == "cancel":
-        st.info("Pagamento annullato: non ti è stato addebitato nulla.")
+    if payment in ("success", "cancel") and user is not None and render_payment_return(payment):
+        return
     if user is None:
-        st.info("👈 **Accedi o crea un account** dalla barra laterale per iniziare.")
+        render_welcome_page()
         return
     if not user.email_verified:
         render_verify_email(user)
         return
 
-    sections = ([GUIDED_VIEW] + ([ARCHIVE_VIEW] if user.has_applications_archive else [])
-                + ([ADMIN_VIEW] if user.is_admin else []))
-    # Valore iniziale via session_state (non `default`): la riapertura di una candidatura cambia sezione da codice.
-    if st.session_state.get("main_view") not in sections:
-        st.session_state.main_view = GUIDED_VIEW
-    view = st.segmented_control("Sezione", sections, key="main_view", label_visibility="collapsed")
+    open_pending_dialogs()
     # Le modifiche fatte dopo il salvataggio finiscono nell'archivio prima di mostrarlo.
     sync_saved_application()
+    view = st.session_state.view
     if view == ARCHIVE_VIEW and user.has_applications_archive:
         render_applications()
         return
     if view == ADMIN_VIEW and user.is_admin:
         render_admin_panel()
         return
+    st.session_state.view = GUIDED_VIEW
 
     # Se lo stato cambia (es. nuovo CV caricato) non si resta su un passo non più raggiungibile.
     while not step_unlocked(st.session_state.step):

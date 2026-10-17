@@ -32,7 +32,7 @@ ADMIN_EMAILS = [
 ]
 # Per quanti giorni il browser resta collegato (cookie), anche ricaricando la pagina.
 SESSION_DAYS = int(os.getenv("SESSION_DAYS", "30"))
-# Ogni quanti secondi la sidebar rilegge il saldo (per vedere subito i crediti acquistati).
+# Ogni quanti secondi la barra in alto rilegge il saldo (per vedere subito i crediti acquistati).
 CREDITS_REFRESH_SECONDS = 5
 
 # --- Pagamenti (Stripe) -----------------------------------------------------

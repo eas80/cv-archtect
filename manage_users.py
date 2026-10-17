@@ -5,6 +5,8 @@ Esempi:
     python manage_users.py credits mario@example.com 10
     python manage_users.py admin mario@example.com on
     python manage_users.py verified mario@example.com on
+    python manage_users.py password mario@example.com NuovaPassword123
+    python manage_users.py delete mario@example.com
 """
 
 import argparse
@@ -26,6 +28,11 @@ def main() -> int:
     verified = sub.add_parser("verified", help="Segna l'email di un utente come confermata o no.")
     verified.add_argument("email")
     verified.add_argument("state", choices=["on", "off"])
+    password = sub.add_parser("password", help="Imposta una nuova password (chiude gli accessi aperti).")
+    password.add_argument("email")
+    password.add_argument("new_password")
+    delete = sub.add_parser("delete", help="Elimina un account (pagamenti e statistiche restano).")
+    delete.add_argument("email")
     args = parser.parse_args()
 
     auth_service.init_db()
@@ -39,6 +46,16 @@ def main() -> int:
                 parser.error("I crediti non possono essere negativi.")
             auth_service.set_credits(args.email, args.amount)
             print(f"Crediti di {args.email}: {args.amount}")
+        elif args.command == "password":
+            auth_service.set_password(args.email, args.new_password)
+            print(f"Password di {args.email} aggiornata")
+        elif args.command == "delete":
+            if input(f"Eliminare definitivamente {args.email}? Scrivi l'email per confermare: ").strip().lower() \
+                    != args.email.strip().lower():
+                print("Annullato.")
+                return 1
+            auth_service.delete_user(args.email)
+            print(f"Account {args.email} eliminato")
         elif args.command == "verified":
             auth_service.set_email_verified(args.email, args.state == "on")
             print(f"Email confermata {args.state} per {args.email}")
