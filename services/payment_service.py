@@ -27,9 +27,9 @@ class CreditPack:
 
 
 CREDIT_PACKS = {
-    "cv1": CreditPack("1 CV", 1, 399),
-    "cv3": CreditPack("3 CV", 3, 899),
-    "cv10": CreditPack("10 CV", 10, 1999),
+    "cv1": CreditPack("1 candidatura", 1, 399),
+    "cv3": CreditPack("3 candidature", 3, 899),
+    "cv10": CreditPack("10 candidature", 10, 1999),
 }
 
 
@@ -63,7 +63,8 @@ def create_checkout(user: auth_service.User, pack_id: str, base_url: str | None 
                     "unit_amount": pack.amount_cents,
                     "product_data": {
                         "name": f"{config.APP_TITLE} · {pack.label}",
-                        "description": f"{pack.credits} crediti per analisi e generazioni",
+                        "description": f"{pack.credits} crediti: 1 credito = 1 candidatura completa "
+                                       "(CV, annuncio e LinkedIn)",
                     },
                 },
             }],

@@ -24,8 +24,13 @@ DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 DB_POOL_MAX_SIZE = int(os.getenv("DB_POOL_MAX_SIZE", "5"))
 # Fuso orario per date e ore mostrate nell'app (i server, come Render, girano in UTC).
 APP_TIMEZONE = os.getenv("APP_TIMEZONE", "Europe/Rome")
-# Crediti regalati a ogni nuovo account (0: si acquistano); ogni analisi/generazione ne consuma 1.
+# Crediti regalati a ogni nuovo account (0: si acquistano).
 INITIAL_CREDITS = int(os.getenv("INITIAL_CREDITS", "0"))
+# 1 credito = 1 candidatura completa (CV, annuncio, LinkedIn): si scala al primo documento
+# scaricato o salvato, o ai testi LinkedIn. Le operazioni con l'AI non costano singolarmente,
+# ma hanno dei tetti per contenere i costi: per candidatura e per utente nelle ultime 24 ore.
+SESSION_AI_CALLS_LIMIT = int(os.getenv("SESSION_AI_CALLS_LIMIT", "20"))
+DAILY_AI_CALLS_LIMIT = int(os.getenv("DAILY_AI_CALLS_LIMIT", "40"))
 # Account admin (uso illimitato), separati da virgola. Sovrascrivibile da .env.
 ADMIN_EMAILS = [
     e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "easycons@gmail.com").split(",") if e.strip()

@@ -299,6 +299,16 @@ def log_usage(user_id: int, action: str) -> None:
         conn.execute("INSERT INTO usage_log (user_id, action) VALUES (%s, %s)", (user_id, action))
 
 
+def ai_calls_last_day(user_id: int) -> int:
+    """Operazioni con Claude dell'utente nelle ultime 24 ore (per il tetto giornaliero)."""
+    with db.transaction() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM usage_log WHERE user_id = %s AND created_at > now() - interval '1 day'",
+            (user_id,),
+        ).fetchone()
+    return row["n"]
+
+
 def add_credits(email: str, delta: int) -> int:
     """Aggiunge (o toglie, se negativo) crediti all'utente; restituisce il nuovo saldo."""
     email = email.strip().lower()
