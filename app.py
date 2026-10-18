@@ -580,8 +580,6 @@ def render_buy_credits(user: auth_service.User, key: str = "buy") -> None:
         "dal momento in cui inizio a usarli.",
         key=f"{key}_waiver",
     )
-    if config.STRIPE_TEST_MODE:
-        st.caption("🧪 Modalità test: paga con la carta 4242 4242 4242 4242, una data futura e un CVC qualsiasi.")
     if st.button("Procedi al pagamento", key=f"{key}_go", type="primary", use_container_width=True,
                  disabled=not waiver, help=None if waiver else "Spunta la casella qui sopra per continuare."):
         waiver_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
