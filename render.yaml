@@ -1,5 +1,9 @@
 # Blueprint Render: New > Blueprint > collega il repository GitHub.
 # I valori con «sync: false» vanno inseriti nella dashboard di Render (non stanno nel repository).
+#
+# Due ambienti dallo stesso codice (vedi DEPLOY.md):
+#   cv-architect       produzione: ramo main,    chiavi Stripe live, database Supabase di produzione
+#   cv-architect-test  prova:      ramo staging, chiavi Stripe test, database Supabase di prova
 services:
   - type: web
     name: cv-architect
@@ -7,6 +11,7 @@ services:
     plan: free
     # Stessa zona del progetto Supabase (es. Frankfurt / eu-central-1) per query più veloci.
     region: frankfurt
+    branch: main
     buildCommand: pip install -r requirements.txt
     # App Streamlit e webhook Stripe nello stesso processo (vedi server.py).
     startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
@@ -17,8 +22,10 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
+      # sk_live_... in produzione, sk_test_... nell'ambiente di prova
       - key: STRIPE_SECRET_KEY
         sync: false
+      # whsec_... del webhook creato nella stessa modalità (live o test) della chiave
       - key: STRIPE_WEBHOOK_SECRET
         sync: false
       # Email con Brevo (API HTTP: Render Free blocca le porte SMTP)
@@ -26,8 +33,34 @@ services:
         sync: false
       - key: EMAIL_SENDER
         sync: false
-      # Indirizzo pubblico del servizio, es. https://cv-architect.onrender.com
-      - key: APP_BASE_URL
+      - key: ADMIN_EMAILS
+        value: easycons@gmail.com
+
+  - type: web
+    name: cv-architect-test
+    runtime: python
+    plan: free
+    region: frankfurt
+    branch: staging
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /_stcore/health
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      # sk_live_... in produzione, sk_test_... nell'ambiente di prova
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      # whsec_... del webhook creato nella stessa modalità (live o test) della chiave
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      # Email con Brevo (API HTTP: Render Free blocca le porte SMTP)
+      - key: BREVO_API_KEY
+        sync: false
+      - key: EMAIL_SENDER
         sync: false
       - key: ADMIN_EMAILS
         value: easycons@gmail.com

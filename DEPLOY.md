@@ -35,9 +35,8 @@ Va fatto una volta sola, su un database vuoto (prima di registrare utenti su Sup
    |---|---|
    | `DATABASE_URL` | la stringa del Session pooler di Supabase |
    | `ANTHROPIC_API_KEY` | la chiave Anthropic |
-   | `STRIPE_SECRET_KEY` | `sk_test_...` (poi `sk_live_...`) |
+   | `STRIPE_SECRET_KEY` | `sk_live_...` in produzione, `sk_test_...` nell'ambiente di prova (vedi passo 4) |
    | `STRIPE_WEBHOOK_SECRET` | dal passo 3 (si può aggiungere dopo) |
-   | `APP_BASE_URL` | l'indirizzo del servizio, es. `https://cv-architect.onrender.com` |
    | `BREVO_API_KEY` | API key di Brevo (vedi sotto) |
    | `EMAIL_SENDER` | indirizzo mittente verificato su Brevo |
 3. Al termine del deploy apri l'indirizzo e **registrati con l'email admin** (`ADMIN_EMAILS`).
@@ -67,8 +66,59 @@ confermati; `python manage_users.py verified <email> on` conferma a mano un indi
 2. Copia il **Signing secret** (`whsec_...`) in `STRIPE_WEBHOOK_SECRET` su Render: il servizio si riavvia da solo.
 3. Prova un acquisto con la carta di test `4242 4242 4242 4242`.
 
-Fai tutte le prove in **modalità test** di Stripe; passa alle chiavi live (e a un nuovo endpoint
-webhook in modalità live) solo alla fine.
+Chiavi e webhook di Stripe sono separati tra modalità **test** e **live**: il webhook va creato nella
+stessa modalità della chiave `STRIPE_SECRET_KEY` del servizio.
+
+## 4. Due ambienti: prova e produzione
+
+`render.yaml` crea due servizi dallo stesso codice:
+
+| Servizio | Ramo git | Stripe | Database |
+|---|---|---|---|
+| `cv-architect` (produzione) | `main` | chiavi **live** (`sk_live_...`) | Supabase di produzione |
+| `cv-architect-test` (prova) | `staging` | chiavi **test** (`sk_test_...`) | Supabase di prova |
+
+Le modifiche si pubblicano prima su `staging`, si provano su `cv-architect-test` con pagamenti
+finti e poi si uniscono in `main` per andare in produzione.
+
+L'app riconosce la modalità dalla chiave Stripe:
+- con chiavi test mostra in alto la fascia **«🧪 Modalità test»** e accredita solo pagamenti di prova;
+- con chiavi live accredita solo pagamenti veri. Un pagamento dell'altra modalità viene ignorato
+  (e scritto nel log), anche se un webhook fosse configurato per errore;
+- il Pannello admin mostra la modalità attiva; vendite e incasso contano solo i pagamenti di quella modalità.
+
+### Attivare l'ambiente di prova
+
+1. **Supabase:** crea un secondo progetto (es. `cv-architect-test`) e copia la stringa del
+   *Session pooler* come al passo 1. Le tabelle si creano al primo avvio.
+2. **Render:** apri il Blueprint → **Manual sync** (o attendi la sincronizzazione dopo il push):
+   compare il servizio `cv-architect-test`. Inserisci le sue variabili: `DATABASE_URL` del
+   progetto di prova, `STRIPE_SECRET_KEY=sk_test_...`, `ANTHROPIC_API_KEY`, `BREVO_API_KEY`, `EMAIL_SENDER`.
+3. **Stripe (modalità test):** crea un webhook verso
+   `https://cv-architect-test.onrender.com/stripe/webhook` e metti il suo `whsec_...` in
+   `STRIPE_WEBHOOK_SECRET` del servizio di prova.
+4. Apri l'indirizzo di prova e registrati con l'email admin.
+
+### Passare la produzione alle chiavi live
+
+1. **Stripe:** completa l'attivazione dell'account (dati dell'attività, IBAN, documento).
+2. **Stripe (modalità live):** Developers → API keys → copia la **Secret key** `sk_live_...`.
+   Poi Webhooks → **Add endpoint** in modalità live verso
+   `https://cv-architect.onrender.com/stripe/webhook`, con gli stessi eventi, e copia il nuovo `whsec_...`.
+3. **Render, servizio `cv-architect`:** sostituisci `STRIPE_SECRET_KEY` con `sk_live_...` e
+   `STRIPE_WEBHOOK_SECRET` con il segreto live. Il servizio si riavvia da solo.
+4. Verifica nel Pannello admin la riga «Stripe: modalità live» e che la fascia «Modalità test» non ci sia.
+5. Fai un acquisto vero del pacchetto più piccolo e rimborsalo da Stripe (Payments → Refund):
+   i crediti di prova si tolgono dal Pannello admin.
+
+I crediti ottenuti in produzione con le vecchie prove di test restano sugli account: correggili dal
+Pannello admin (o `python manage_users.py`) se serve.
+
+### Recesso
+
+Prima del pagamento l'utente deve spuntare la casella con cui chiede di usare subito i crediti e
+accetta di perdere il diritto di recesso di 14 giorni (contenuti digitali, normativa UE).
+Data e ora del consenso restano nei metadati del pagamento su Stripe (`withdrawal_waiver_at`).
 
 ## In locale
 

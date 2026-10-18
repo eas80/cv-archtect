@@ -261,14 +261,15 @@ def consume_credit(user_id: int) -> bool:
         return bool(row and row["is_admin"])
 
 
-def record_purchase(stripe_session_id: str, user_id: int, credits: int, amount_total: int, currency: str) -> bool:
+def record_purchase(stripe_session_id: str, user_id: int, credits: int, amount_total: int, currency: str,
+                    livemode: bool) -> bool:
     """Registra l'acquisto e accredita i crediti. False se la sessione era già stata erogata."""
     with db.transaction() as conn:
         # ON CONFLICT invece di intercettare l'errore: la transazione resta valida per il resto.
         inserted = conn.execute(
-            "INSERT INTO payments (stripe_session_id, user_id, credits, amount_total, currency) "
-            "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (stripe_session_id) DO NOTHING",
-            (stripe_session_id, user_id, credits, amount_total, currency),
+            "INSERT INTO payments (stripe_session_id, user_id, credits, amount_total, currency, livemode) "
+            "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (stripe_session_id) DO NOTHING",
+            (stripe_session_id, user_id, credits, amount_total, currency, livemode),
         ).rowcount
         if not inserted:
             return False
@@ -329,10 +330,11 @@ def users_overview() -> list[dict]:
             SELECT u.email, u.credits, u.is_admin, u.can_save_applications, u.email_verified,
                    to_char(u.created_at AT TIME ZONE %(tz)s, 'YYYY-MM-DD HH24:MI:SS') AS created_at,
                    (SELECT COUNT(*) FROM usage_log l WHERE l.user_id = u.id) AS claude_calls,
-                   (SELECT COUNT(*) FROM payments p WHERE p.user_id = u.id) AS purchases,
-                   (SELECT COALESCE(SUM(amount_total), 0) FROM payments p WHERE p.user_id = u.id) AS spent_cents
+                   (SELECT COUNT(*) FROM payments p WHERE p.user_id = u.id AND p.livemode = %(live)s) AS purchases,
+                   (SELECT COALESCE(SUM(amount_total), 0) FROM payments p
+                    WHERE p.user_id = u.id AND p.livemode = %(live)s) AS spent_cents
             FROM users u ORDER BY u.id
-        """, {"tz": config.APP_TIMEZONE}).fetchall()
+        """, {"tz": config.APP_TIMEZONE, "live": not config.STRIPE_TEST_MODE}).fetchall()
 
 
 def usage_stats() -> dict:
@@ -350,11 +352,16 @@ def usage_stats() -> dict:
 
 
 def sales_stats() -> dict:
-    """Vendite complessive: numero di acquisti, incasso in centesimi e crediti venduti."""
+    """Vendite complessive: numero di acquisti, incasso in centesimi e crediti venduti.
+
+    Contano solo i pagamenti della modalità Stripe attiva: in produzione le prove fatte con le
+    chiavi di test non risultano come incassi.
+    """
     with db.transaction() as conn:
         row = conn.execute(
             "SELECT COUNT(*) AS count, COALESCE(SUM(amount_total), 0) AS revenue_cents, "
-            "COALESCE(SUM(credits), 0) AS credits FROM payments"
+            "COALESCE(SUM(credits), 0) AS credits FROM payments WHERE livemode = %s",
+            (not config.STRIPE_TEST_MODE,),
         ).fetchone()
     return {"count": row["count"], "revenue_cents": int(row["revenue_cents"]), "credits": int(row["credits"])}
 

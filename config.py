@@ -44,6 +44,9 @@ CREDITS_REFRESH_SECONDS = 5
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "").strip()
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
 STRIPE_CURRENCY = "eur"
+# Chiavi di prova (sk_test_/rk_test_): l'app mostra la fascia «Modalità test» e accredita
+# solo pagamenti di prova; con chiavi live solo pagamenti veri.
+STRIPE_TEST_MODE = STRIPE_SECRET_KEY.startswith(("sk_test_", "rk_test_"))
 # Indirizzo dell'app a cui Stripe riporta l'utente dopo il pagamento.
 # Senza APP_BASE_URL si usa l'indirizzo pubblico che Render imposta da solo (RENDER_EXTERNAL_URL).
 APP_BASE_URL = (os.getenv("APP_BASE_URL") or os.getenv("RENDER_EXTERNAL_URL") or "http://localhost:8520").rstrip("/")

@@ -41,15 +41,23 @@ def payments_enabled() -> bool:
     return bool(config.STRIPE_SECRET_KEY)
 
 
+def stripe_mode_label() -> str:
+    if not payments_enabled():
+        return "non configurato"
+    return "test (pagamenti di prova)" if config.STRIPE_TEST_MODE else "live (pagamenti veri)"
+
+
 def _client() -> stripe.StripeClient:
     return stripe.StripeClient(config.STRIPE_SECRET_KEY)
 
 
-def create_checkout(user: auth_service.User, pack_id: str, base_url: str | None = None) -> tuple[str, str]:
+def create_checkout(user: auth_service.User, pack_id: str, base_url: str | None = None,
+                    withdrawal_waiver_at: str | None = None) -> tuple[str, str]:
     """Crea una Checkout Session per il pacchetto; restituisce (id sessione, URL di pagamento).
 
     `base_url` è l'indirizzo dell'app a cui Stripe riporta l'utente (di norma quello della pagina
-    aperta); se manca si usa APP_BASE_URL.
+    aperta); se manca si usa APP_BASE_URL. `withdrawal_waiver_at` è il momento (ISO 8601) in cui
+    l'utente ha accettato di perdere il diritto di recesso: resta nei metadati del pagamento come prova.
     """
     pack = CREDIT_PACKS[pack_id]
     base_url = (base_url or config.APP_BASE_URL).rstrip("/")
@@ -70,7 +78,8 @@ def create_checkout(user: auth_service.User, pack_id: str, base_url: str | None 
             }],
             "customer_email": user.email,
             "client_reference_id": str(user.id),
-            "metadata": {"user_id": str(user.id), "pack_id": pack_id},
+            "metadata": {"user_id": str(user.id), "pack_id": pack_id,
+                         **({"withdrawal_waiver_at": withdrawal_waiver_at} if withdrawal_waiver_at else {})},
             "success_url": f"{base_url}/?payment=success",
             "cancel_url": f"{base_url}/?payment=cancel",
         })
@@ -101,6 +110,12 @@ def fulfill_checkout(session) -> int:
         # Pagamenti asincroni (es. bonifico): si erogano con checkout.session.async_payment_succeeded.
         log.info("Sessione %s non ancora pagata (%s)", session.id, session.payment_status)
         return 0
+    # Un pagamento di prova non dà crediti in produzione (e uno vero non finisce nell'ambiente di prova),
+    # anche se un webhook o una chiave fossero configurati per errore.
+    if bool(session.livemode) == config.STRIPE_TEST_MODE:
+        log.error("Sessione %s ignorata: livemode=%s ma l'app usa chiavi %s",
+                  session.id, session.livemode, "test" if config.STRIPE_TEST_MODE else "live")
+        return 0
     metadata = session.metadata.to_dict() if session.metadata else {}
     pack = CREDIT_PACKS.get(metadata.get("pack_id", ""))
     # Prezzo e valuta si confrontano con il listino: i crediti dipendono da ciò che è stato davvero pagato.
@@ -109,7 +124,8 @@ def fulfill_checkout(session) -> int:
                   session.id, metadata, session.amount_total, session.currency)
         return 0
     user_id = int(metadata["user_id"])
-    if not auth_service.record_purchase(session.id, user_id, pack.credits, session.amount_total, session.currency):
+    if not auth_service.record_purchase(session.id, user_id, pack.credits, session.amount_total, session.currency,
+                                        livemode=bool(session.livemode)):
         log.info("Sessione %s già erogata", session.id)
         return 0
     log.info("Accreditati %s crediti all'utente %s (sessione %s)", pack.credits, user_id, session.id)

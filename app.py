@@ -5,6 +5,7 @@ import html
 import io
 import re
 import time
+from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 import pandas as pd
@@ -125,6 +126,8 @@ STEPPER_CSS = """
   .cv-stepper { margin-bottom: 1rem; }
 }
 .cv-brand { font-size: 1.25rem; font-weight: 700; white-space: nowrap; }
+.cv-test-banner { background: #F59E0B; color: #1F2937; text-align: center; font-size: 0.85rem;
+    padding: 0.35rem 0.75rem; border-radius: 0.5rem; }
 /* Barra in alto: Streamlit la rende scorrevole e, con il logo più alto della riga, comparirebbe
    una barra di scorrimento accanto al menu ☰. */
 .st-key-topbar, .st-key-topbar [data-testid="stHorizontalBlock"] { overflow: visible !important; }
@@ -570,9 +573,21 @@ def render_buy_credits(user: auth_service.User, key: str = "buy") -> None:
         format_func=lambda k: f"{packs[k].label} — {packs[k].price_label}"
         + (f" ({euro(round(packs[k].amount_cents / packs[k].credits))} a candidatura)" if packs[k].credits > 1 else ""),
     )
-    if st.button("Procedi al pagamento", key=f"{key}_go", type="primary", use_container_width=True):
+    # Contenuto digitale: per la normativa UE il recesso di 14 giorni si perde solo con il consenso
+    # espresso dell'utente prima del pagamento.
+    waiver = st.checkbox(
+        "Voglio usare subito i crediti e accetto di perdere il diritto di recesso di 14 giorni "
+        "dal momento in cui inizio a usarli.",
+        key=f"{key}_waiver",
+    )
+    if config.STRIPE_TEST_MODE:
+        st.caption("🧪 Modalità test: paga con la carta 4242 4242 4242 4242, una data futura e un CVC qualsiasi.")
+    if st.button("Procedi al pagamento", key=f"{key}_go", type="primary", use_container_width=True,
+                 disabled=not waiver, help=None if waiver else "Spunta la casella qui sopra per continuare."):
+        waiver_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         try:
-            st.session_state.checkout = (pack_id, *payment_service.create_checkout(user, pack_id, current_base_url()))
+            st.session_state.checkout = (pack_id, *payment_service.create_checkout(
+                user, pack_id, current_base_url(), withdrawal_waiver_at=waiver_at))
         except payment_service.PaymentError as exc:
             st.error(str(exc))
     checkout = st.session_state.get("checkout")
@@ -1829,6 +1844,8 @@ def render_admin_panel() -> None:
     c4.metric("Crediti venduti", sales["credits"])
     if usage["by_action"]:
         st.caption("Chiamate per tipo: " + " · ".join(f"{a} {n}" for a, n in usage["by_action"].items()))
+    st.caption(f"**Stripe:** modalità {payment_service.stripe_mode_label()}. Vendite e incasso contano solo "
+               "i pagamenti di questa modalità.")
 
     st.divider()
     st.markdown("#### Impostazioni")
@@ -1927,6 +1944,9 @@ def main() -> None:
     user = current_user()
 
     st.markdown(STEPPER_CSS, unsafe_allow_html=True)
+    if config.STRIPE_TEST_MODE:
+        st.markdown('<div class="cv-test-banner">🧪 <b>Modalità test</b> · ambiente di prova: i pagamenti sono '
+                    'finti e non addebitano nulla</div>', unsafe_allow_html=True)
     render_topbar(user)
     emit_cookie_script()
     emit_scroll_script()

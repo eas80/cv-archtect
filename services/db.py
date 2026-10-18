@@ -63,6 +63,9 @@ CREATE TABLE IF NOT EXISTS payments (
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS payments_user_idx ON payments (user_id);
+-- Pagamento vero (chiavi live) o di prova (chiavi test). I pagamenti registrati prima di
+-- questa colonna erano tutti di prova.
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS livemode BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- Accessi ricordati dal browser (cookie): si salva solo l'hash del token.
 CREATE TABLE IF NOT EXISTS login_sessions (
