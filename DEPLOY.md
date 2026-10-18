@@ -120,6 +120,19 @@ Prima del pagamento l'utente deve spuntare la casella con cui chiede di usare su
 accetta di perdere il diritto di recesso di 14 giorni (contenuti digitali, normativa UE).
 Data e ora del consenso restano nei metadati del pagamento su Stripe (`withdrawal_waiver_at`).
 
+## 5. Motori di ricerca (SEO)
+
+`seo.py` serve la pagina iniziale con titolo, descrizione, anteprima social e testo leggibile da
+Google, più `/robots.txt` e `/sitemap.xml`. L'ambiente di prova (ramo `staging`) è escluso
+dall'indicizzazione in automatico.
+
+1. Su [Google Search Console](https://search.google.com/search-console) aggiungi la proprietà
+   «Prefisso URL» con l'indirizzo di produzione e scegli la verifica «Tag HTML»: copia il valore di
+   `content="..."` nella variabile `GOOGLE_SITE_VERIFICATION` del servizio `cv-architect` su Render,
+   attendi il riavvio e premi **Verifica**.
+2. In **Sitemap** invia `sitemap.xml`.
+3. Se passi a un dominio tuo, imposta `APP_BASE_URL` su Render: link canonici e sitemap lo usano.
+
 ## In locale
 
 ```

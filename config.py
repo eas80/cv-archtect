@@ -74,6 +74,12 @@ EMAIL_CODE_RESEND_SECONDS = 60
 # alla registrazione si salva quella accettata dall'utente.
 LEGAL_VERSION = "2026-10-18"
 
+# --- SEO ----------------------------------------------------------------------
+# L'ambiente di test (ramo staging su Render) non va indicizzato dai motori di ricerca.
+SEO_NOINDEX = os.getenv("SEO_NOINDEX", "").strip() == "1" or os.getenv("RENDER_GIT_BRANCH") == "staging"
+# Codice del meta tag di verifica di Google Search Console (solo il valore di «content»).
+GOOGLE_SITE_VERIFICATION = os.getenv("GOOGLE_SITE_VERIFICATION", "").strip()
+
 # --- Scraper ----------------------------------------------------------------
 SCRAPER_TIMEOUT_SECONDS = 15
 SCRAPER_USER_AGENT = (

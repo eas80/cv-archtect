@@ -15,6 +15,7 @@ from pypdf import PdfReader
 from pypdf.errors import PyPdfError
 
 import config
+import seo
 from editors import bump, edit_linkedin, edit_resume, edit_text
 from schemas import JobMatchResult, LinkedInContent, ResumeData
 from services import (
@@ -37,8 +38,8 @@ from services import (
 )
 
 st.set_page_config(
-    page_title=config.APP_TITLE,
-    page_icon=config.APP_ICON,
+    page_title=seo.TITLE,
+    page_icon="assets/icon-180.png",
     layout="centered",
 )
 
@@ -393,8 +394,9 @@ def render_welcome_page() -> None:
         return
 
     st.markdown("## Il tuo CV su misura per ogni annuncio")
-    st.markdown("Carica il CV una volta: l'AI lo adatta a ogni offerta di lavoro, scrive la lettera di "
-                "presentazione e prepara il tuo profilo LinkedIn.")
+    st.markdown("Carica il curriculum una volta: l'AI lo adatta a ogni offerta di lavoro, lo rende leggibile "
+                "dai sistemi di selezione (ATS), scrive la lettera di presentazione e prepara il tuo profilo "
+                "LinkedIn. Senza abbonamento, da 3,99 € a candidatura.")
     with st.container(horizontal=True, gap="medium"):
         for icon, title, text in (("📄", "1. Carica il CV", "PDF o testo, lo riordiniamo noi"),
                                   ("🎯", "2. Scegli l'annuncio", "CV adattato e lettera pronta"),
@@ -404,6 +406,10 @@ def render_welcome_page() -> None:
                 st.caption(text)
     with st.container(border=True):
         render_auth_forms()
+    st.markdown("#### Domande frequenti")
+    for question, answer in seo.FAQ:
+        with st.expander(question):
+            st.markdown(answer)
     st.button("✉️ Hai domande? Contattaci", type="tertiary", key="welcome_contact", on_click=open_contact_dialog)
     st.caption(legal_links())
 
@@ -848,6 +854,7 @@ def close_legal_page() -> None:
 
 
 def render_legal_page(doc: str) -> None:
+    st.set_page_config(page_title=seo.DOC_PAGES[doc][0])
     st.button("← Torna all'app", type="tertiary", key="legal_back", on_click=close_legal_page)
     with st.container(border=True):
         st.markdown(legal_text(doc))
