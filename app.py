@@ -585,7 +585,8 @@ def render_buy_credits(user: auth_service.User, key: str = "buy") -> None:
         "dal momento in cui inizio a usarli.",
         key=f"{key}_waiver",
     )
-    st.caption(f"Acquistando accetti i {legal_link('termini', 'Termini e condizioni')} (recesso: art. 6).")
+    st.caption(f"I crediti valgono {config.CREDITS_VALIDITY_MONTHS} mesi dall'acquisto. Acquistando accetti i "
+               f"{legal_link('termini', 'Termini e condizioni')} (recesso: art. 6).")
     if st.button("Procedi al pagamento", key=f"{key}_go", type="primary", use_container_width=True,
                  disabled=not waiver, help=None if waiver else "Spunta la casella qui sopra per continuare."):
         waiver_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -610,6 +611,10 @@ def buy_dialog() -> None:
     if user.credits:
         st.markdown(f"Hai **{plural(user.credits, 'credito', 'crediti')}**. Ogni candidatura completa "
                     "(CV, annuncio e LinkedIn) ne usa 1.")
+        expiries = auth_service.credit_expiries(user.id)
+        st.caption("Scadenza: " + " · ".join(
+            f"{plural(e['credits'], 'credito', 'crediti')} entro il {e['expires_on']}" for e in expiries)
+            + ". Si usano prima quelli che scadono prima.")
         st.markdown("**Ricarica crediti**")
     else:
         if free_mode_enabled():

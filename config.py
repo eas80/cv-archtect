@@ -26,6 +26,8 @@ DB_POOL_MAX_SIZE = int(os.getenv("DB_POOL_MAX_SIZE", "5"))
 APP_TIMEZONE = os.getenv("APP_TIMEZONE", "Europe/Rome")
 # Crediti regalati a ogni nuovo account (0: si acquistano).
 INITIAL_CREDITS = int(os.getenv("INITIAL_CREDITS", "0"))
+# Ogni lotto di crediti (acquisto, regalo dell'admin) scade dopo questi mesi (Termini, art. 5.5).
+CREDITS_VALIDITY_MONTHS = 24
 # 1 credito = 1 candidatura completa (CV, annuncio, LinkedIn): si scala al primo documento
 # scaricato o salvato, o ai testi LinkedIn. Le operazioni con l'AI non costano singolarmente,
 # ma hanno dei tetti per contenere i costi: per candidatura e per utente nelle ultime 24 ore.

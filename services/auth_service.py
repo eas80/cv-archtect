@@ -88,7 +88,78 @@ def _select_user(where: str, params: dict) -> User | None:
     with db.transaction() as conn:
         row = conn.execute(f"SELECT {_USER_COLUMNS} FROM users WHERE {where}",
                            {"tz": config.APP_TIMEZONE, **params}).fetchone()
+        # Il saldo letto tiene già conto dei lotti scaduti.
+        if row and row["credits"] and conn.execute(_EXPIRE_DUE_LOTS, {"uid": row["id"]}).rowcount:
+            row = conn.execute(f"SELECT {_USER_COLUMNS} FROM users WHERE id = %(id)s",
+                               {"tz": config.APP_TIMEZONE, "id": row["id"]}).fetchone()
     return _to_user(row)
+
+
+# --- Lotti di crediti -----------------------------------------------------------------
+# Azzera i lotti scaduti (di un utente, o di tutti con uid NULL) e li toglie dal saldo.
+# rowcount = numero di utenti il cui saldo è cambiato.
+_EXPIRE_DUE_LOTS = """
+WITH due AS (
+    SELECT id, user_id, credits_left FROM credit_lots
+    WHERE credits_left > 0 AND expires_at <= now()
+      AND (%(uid)s::bigint IS NULL OR user_id = %(uid)s::bigint)
+    FOR UPDATE
+), cleared AS (
+    UPDATE credit_lots l SET expired_credits = l.expired_credits + due.credits_left, credits_left = 0
+    FROM due WHERE l.id = due.id
+)
+UPDATE users u SET credits = GREATEST(u.credits - t.n, 0)
+FROM (SELECT user_id, SUM(credits_left) AS n FROM due GROUP BY user_id) t
+WHERE u.id = t.user_id
+"""
+
+
+def _add_lot(conn, user_id: int, credits: int, source: str, stripe_session_id: str | None = None) -> None:
+    """Nuovo lotto con scadenza a CREDITS_VALIDITY_MONTHS mesi, aggiunto al saldo."""
+    conn.execute(
+        "INSERT INTO credit_lots (user_id, source, stripe_session_id, credits, credits_left, expires_at) "
+        "VALUES (%(uid)s, %(source)s, %(sid)s, %(n)s, %(n)s, now() + make_interval(months => %(months)s))",
+        {"uid": user_id, "source": source, "sid": stripe_session_id, "n": credits,
+         "months": config.CREDITS_VALIDITY_MONTHS},
+    )
+    conn.execute("UPDATE users SET credits = credits + %s WHERE id = %s", (credits, user_id))
+
+
+def _take_credits(conn, user_id: int, amount: int) -> bool:
+    """Toglie `amount` crediti partendo dai lotti che scadono prima. False (e nulla cambia) se non bastano."""
+    conn.execute(_EXPIRE_DUE_LOTS, {"uid": user_id})
+    lots = conn.execute(
+        "SELECT id, credits_left FROM credit_lots WHERE user_id = %s AND credits_left > 0 "
+        "ORDER BY expires_at, id FOR UPDATE", (user_id,),
+    ).fetchall()
+    if sum(lot["credits_left"] for lot in lots) < amount:
+        return False
+    left = amount
+    for lot in lots:
+        take = min(left, lot["credits_left"])
+        conn.execute("UPDATE credit_lots SET credits_left = credits_left - %s WHERE id = %s", (take, lot["id"]))
+        left -= take
+        if not left:
+            break
+    conn.execute("UPDATE users SET credits = credits - %s WHERE id = %s", (amount, user_id))
+    return True
+
+
+def credit_expiries(user_id: int) -> list[dict]:
+    """Crediti ancora validi raggruppati per giorno di scadenza (data «GG/MM/AAAA» nel fuso dell'app)."""
+    with db.transaction() as conn:
+        conn.execute(_EXPIRE_DUE_LOTS, {"uid": user_id})
+        return conn.execute(
+            "SELECT to_char(expires_at AT TIME ZONE %(tz)s, 'DD/MM/YYYY') AS expires_on, SUM(credits_left) AS credits "
+            "FROM credit_lots WHERE user_id = %(uid)s AND credits_left > 0 "
+            "GROUP BY 1, (expires_at AT TIME ZONE %(tz)s)::date ORDER BY (expires_at AT TIME ZONE %(tz)s)::date",
+            {"tz": config.APP_TIMEZONE, "uid": user_id},
+        ).fetchall()
+
+
+def expire_all_credits() -> None:
+    with db.transaction() as conn:
+        conn.execute(_EXPIRE_DUE_LOTS, {"uid": None})
 
 
 def init_db() -> None:
@@ -111,10 +182,13 @@ def register(email: str, password: str, terms_version: str) -> User:
         with db.transaction() as conn:
             row = conn.execute(
                 "INSERT INTO users (email, password_hash, credits, is_admin, terms_accepted_at, terms_version) "
-                f"VALUES (%(email)s, %(pw)s, %(credits)s, %(admin)s, now(), %(terms)s) RETURNING {_USER_COLUMNS}",
-                {"email": email, "pw": _hash_secret(password), "credits": config.INITIAL_CREDITS,
+                f"VALUES (%(email)s, %(pw)s, 0, %(admin)s, now(), %(terms)s) RETURNING {_USER_COLUMNS}",
+                {"email": email, "pw": _hash_secret(password),
                  "admin": email in config.ADMIN_EMAILS, "terms": terms_version, "tz": config.APP_TIMEZONE},
             ).fetchone()
+            if config.INITIAL_CREDITS:
+                _add_lot(conn, row["id"], config.INITIAL_CREDITS, "initial")
+                row = {**row, "credits": config.INITIAL_CREDITS}
     except errors.UniqueViolation as exc:
         raise AuthError("Esiste già un account con questa email. Se è tuo e non ricordi la password, "
                         "usa «Password dimenticata».") from exc
@@ -256,12 +330,11 @@ def delete_login_session(token: str | None) -> None:
 def consume_credit(user_id: int) -> bool:
     """Scala un credito; True se riuscito. Gli admin non consumano crediti."""
     with db.transaction() as conn:
-        # Condizione nella stessa UPDATE: due richieste concorrenti non portano i crediti sotto zero.
-        if conn.execute("UPDATE users SET credits = credits - 1 WHERE id = %s AND NOT is_admin AND credits > 0",
-                        (user_id,)).rowcount:
-            return True
-        row = conn.execute("SELECT is_admin FROM users WHERE id = %s", (user_id,)).fetchone()
-        return bool(row and row["is_admin"])
+        # Riga dell'utente bloccata: due richieste concorrenti non scalano lo stesso credito.
+        row = conn.execute("SELECT is_admin FROM users WHERE id = %s FOR UPDATE", (user_id,)).fetchone()
+        if row is None:
+            return False
+        return row["is_admin"] or _take_credits(conn, user_id, 1)
 
 
 def record_purchase(stripe_session_id: str, user_id: int, credits: int, amount_total: int, currency: str,
@@ -276,8 +349,9 @@ def record_purchase(stripe_session_id: str, user_id: int, credits: int, amount_t
         ).rowcount
         if not inserted:
             return False
-        if not conn.execute("UPDATE users SET credits = credits + %s WHERE id = %s", (credits, user_id)).rowcount:
+        if conn.execute("SELECT 1 FROM users WHERE id = %s", (user_id,)).fetchone() is None:
             raise AuthError(f"Utente {user_id} inesistente.")
+        _add_lot(conn, user_id, credits, "purchase", stripe_session_id)
     return True
 
 
@@ -317,18 +391,21 @@ def add_credits(email: str, delta: int) -> int:
     """Aggiunge (o toglie, se negativo) crediti all'utente; restituisce il nuovo saldo."""
     email = email.strip().lower()
     with db.transaction() as conn:
-        row = conn.execute("SELECT id, credits FROM users WHERE email = %s FOR UPDATE", (email,)).fetchone()
+        row = conn.execute("SELECT id FROM users WHERE email = %s FOR UPDATE", (email,)).fetchone()
         if row is None:
             raise AuthError(f"Nessun utente con email {email}.")
-        if row["credits"] + delta < 0:
-            raise AuthError(f"{email} ha solo {row['credits']} crediti: non se ne possono togliere {-delta}.")
-        conn.execute("UPDATE users SET credits = credits + %s WHERE id = %s", (delta, row["id"]))
-        return row["credits"] + delta
+        if delta > 0:
+            _add_lot(conn, row["id"], delta, "admin")
+        elif delta < 0 and not _take_credits(conn, row["id"], -delta):
+            balance = conn.execute("SELECT credits FROM users WHERE id = %s", (row["id"],)).fetchone()["credits"]
+            raise AuthError(f"{email} ha solo {balance} crediti: non se ne possono togliere {-delta}.")
+        return conn.execute("SELECT credits FROM users WHERE id = %s", (row["id"],)).fetchone()["credits"]
 
 
 def users_overview() -> list[dict]:
     """Utenti con saldo, operazioni con Claude e acquisti, per il pannello admin."""
     with db.transaction() as conn:
+        conn.execute(_EXPIRE_DUE_LOTS, {"uid": None})
         return conn.execute("""
             SELECT u.email, u.credits, u.is_admin, u.can_save_applications, u.email_verified,
                    to_char(u.created_at AT TIME ZONE %(tz)s, 'YYYY-MM-DD HH24:MI:SS') AS created_at,
@@ -376,7 +453,12 @@ def _update_user_field(email: str, column: str, value) -> None:
 
 
 def set_credits(email: str, credits: int) -> None:
-    _update_user_field(email, "credits", credits)
+    """Porta il saldo a `credits`, aggiungendo un lotto o togliendo crediti dai lotti."""
+    user = _select_user("email = %(email)s", {"email": email.strip().lower()})
+    if user is None:
+        raise AuthError(f"Nessun utente con email {email}.")
+    if credits != user.credits:
+        add_credits(email, credits - user.credits)
 
 
 def set_can_save_applications(email: str, enabled: bool) -> None:
@@ -424,5 +506,6 @@ def delete_own_account(user_id: int, password: str) -> None:
 
 def list_users() -> list[User]:
     with db.transaction() as conn:
+        conn.execute(_EXPIRE_DUE_LOTS, {"uid": None})
         rows = conn.execute(f"SELECT {_USER_COLUMNS} FROM users ORDER BY id", {"tz": config.APP_TIMEZONE}).fetchall()
     return [_to_user(r) for r in rows]
