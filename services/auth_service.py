@@ -358,18 +358,26 @@ def record_purchase(stripe_session_id: str, user_id: int, credits: int, amount_t
 FLAG_FREE_MANUAL_MODE = "free_manual_mode"
 
 
-def get_flag(key: str) -> bool:
+def get_setting(key: str) -> str | None:
     with db.transaction() as conn:
         row = conn.execute("SELECT value FROM settings WHERE key = %s", (key,)).fetchone()
-    return bool(row and row["value"] == "1")
+    return row["value"] if row else None
 
 
-def set_flag(key: str, enabled: bool) -> None:
+def set_setting(key: str, value: str) -> None:
     with db.transaction() as conn:
         conn.execute(
             "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-            (key, "1" if enabled else "0"),
+            (key, value),
         )
+
+
+def get_flag(key: str) -> bool:
+    return get_setting(key) == "1"
+
+
+def set_flag(key: str, enabled: bool) -> None:
+    set_setting(key, "1" if enabled else "0")
 
 
 def log_usage(user_id: int, action: str) -> None:

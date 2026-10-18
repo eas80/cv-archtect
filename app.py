@@ -396,7 +396,7 @@ def render_welcome_page() -> None:
     st.markdown("## Il tuo CV su misura per ogni annuncio")
     st.markdown("Carica il curriculum una volta: l'AI lo adatta a ogni offerta di lavoro, lo rende leggibile "
                 "dai sistemi di selezione (ATS), scrive la lettera di presentazione e prepara il tuo profilo "
-                "LinkedIn. Senza abbonamento, da 3,99 € a candidatura.")
+                f"LinkedIn. Senza abbonamento, da {seo.price_from()} a candidatura.")
     with st.container(horizontal=True, gap="medium"):
         for icon, title, text in (("📄", "1. Carica il CV", "PDF o testo, lo riordiniamo noi"),
                                   ("🎯", "2. Scegli l'annuncio", "CV adattato e lettera pronta"),
@@ -407,7 +407,7 @@ def render_welcome_page() -> None:
     with st.container(border=True):
         render_auth_forms()
     st.markdown("#### Domande frequenti")
-    for question, answer in seo.FAQ:
+    for question, answer in seo.faq():
         with st.expander(question):
             st.markdown(answer)
     st.button("✉️ Hai domande? Contattaci", type="tertiary", key="welcome_contact", on_click=open_contact_dialog)
@@ -566,23 +566,28 @@ def render_delivery_blocked(key: str) -> None:
 
 
 def price_hook() -> str:
-    packs = payment_service.CREDIT_PACKS.values()
+    packs = payment_service.credit_packs().values()
     cheapest = min(packs, key=lambda p: p.amount_cents)
-    best = min(packs, key=lambda p: p.amount_cents / p.credits)
+    best = min(packs, key=lambda p: p.unit_cents)
+    if best == cheapest:
+        return f"{cheapest.price_label} per {cheapest.label}."
     return (f"Da {cheapest.price_label} per {cheapest.label}, oppure solo "
-            f"{euro(round(best.amount_cents / best.credits))} a candidatura con il pacchetto da {best.label}.")
+            f"{euro(best.unit_cents)} a candidatura con il pacchetto da {best.label}.")
 
 
 def render_buy_credits(user: auth_service.User, key: str = "buy") -> None:
     if not payment_service.payments_enabled():
         st.caption("Gli acquisti non sono ancora attivi.")
         return
-    packs = payment_service.CREDIT_PACKS
+    packs = payment_service.credit_packs()
+    # Il listino può cambiare (pannello admin): una scelta che non esiste più si dimentica.
+    if st.session_state.get(f"{key}_pack") not in packs:
+        st.session_state.pop(f"{key}_pack", None)
     pack_id = st.radio(
         "Pacchetto", list(packs), key=f"{key}_pack", label_visibility="collapsed",
         index=len(packs) - 1,
         format_func=lambda k: f"{packs[k].label} — {packs[k].price_label}"
-        + (f" ({euro(round(packs[k].amount_cents / packs[k].credits))} a candidatura)" if packs[k].credits > 1 else ""),
+        + (f" ({euro(packs[k].unit_cents)} a candidatura)" if packs[k].credits > 1 else ""),
     )
     # Contenuto digitale: per la normativa UE il recesso di 14 giorni si perde solo con il consenso
     # espresso dell'utente prima del pagamento.
@@ -1929,6 +1934,40 @@ def render_account_admin(current: auth_service.User) -> None:
                     st.error(str(exc))
 
 
+def render_price_list_admin() -> None:
+    """Listino dei pacchetti di crediti: candidature e prezzo, modificabili dall'admin."""
+    st.markdown("#### Pacchetti e prezzi")
+    packs = payment_service.credit_packs()
+    table = pd.DataFrame([{"Candidature": p.credits, "Prezzo (€)": p.amount_cents / 100} for p in packs.values()])
+    with st.form("admin_price_list", border=False):
+        edited = st.data_editor(
+            table, hide_index=True, num_rows="dynamic", key="admin_price_editor", use_container_width=True,
+            column_config={
+                "Candidature": st.column_config.NumberColumn(min_value=1, max_value=1000, step=1, required=True),
+                "Prezzo (€)": st.column_config.NumberColumn(
+                    min_value=payment_service.MIN_AMOUNT_CENTS / 100, max_value=1000, step=0.01, format="%.2f",
+                    required=True),
+            },
+        )
+        saved = st.form_submit_button("Salva prezzi", type="primary")
+    if saved:
+        rows = edited.dropna()
+        try:
+            payment_service.save_credit_packs(
+                [(int(r["Candidature"]), round(float(r["Prezzo (€)"]) * 100)) for _, r in rows.iterrows()])
+        except ValueError as exc:
+            st.error(str(exc))
+        else:
+            st.session_state.pop("admin_price_editor", None)
+            st.toast("Prezzi aggiornati.")
+            st.rerun()
+    st.caption(
+        " · ".join(f"{p.label}: {p.price_label}" + (f" ({euro(p.unit_cents)} l'una)" if p.credits > 1 else "")
+                   for p in packs.values())
+        + f". In home page: **da {seo.price_from(packs)} a candidatura** (il prezzo più basso, arrotondato per "
+        "difetto). I pagamenti già avviati restano al prezzo di quel momento.")
+
+
 def render_admin_panel() -> None:
     st.markdown("### Pannello Admin")
     usage = auth_service.usage_stats()
@@ -1969,6 +2008,9 @@ def render_admin_panel() -> None:
         st.caption(f"Chiave letta da ANTHROPIC_API_KEY · modello `{config.CLAUDE_MODEL}`")
     else:
         st.warning("Nessuna API key configurata.")
+
+    st.divider()
+    render_price_list_admin()
 
     st.divider()
     # Il form va prima della tabella, così dopo una modifica la tabella mostra già il nuovo saldo.

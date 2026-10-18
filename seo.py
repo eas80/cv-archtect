@@ -9,23 +9,18 @@ per un istante, poi l'app lo sostituisce; i motori di ricerca lo leggono subito.
 import functools
 import html
 import json
-import os
 from pathlib import Path
 
 import streamlit
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
 import config
-from services.payment_service import CREDIT_PACKS
+from services.payment_service import CreditPack, credit_packs, format_euro, lowest_unit_cents
 
 TITLE = "CV Architect – CV su misura con l'AI per ogni annuncio di lavoro"
-DESCRIPTION = (
-    "Carica il tuo curriculum: l'Intelligenza Artificiale lo adatta a ogni offerta di lavoro, "
-    "lo ottimizza per gli ATS, scrive la lettera di presentazione e prepara il profilo LinkedIn. "
-    "Da 3,99 € a candidatura, senza abbonamento."
-)
 KEYWORDS = (
     "curriculum vitae, CV, creare CV, CV con intelligenza artificiale, CV ATS, CV ottimizzato, "
     "lettera di presentazione, lettera motivazionale, profilo LinkedIn, candidatura, offerte di lavoro"
@@ -39,45 +34,55 @@ DOC_PAGES = {
                 "Informativa privacy e cookie di CV Architect: quali dati trattiamo, perché, per quanto tempo e i tuoi diritti."),
 }
 
-# Domande frequenti: mostrate anche nella pagina di benvenuto dell'app.
-FAQ = [
-    ("Come funziona CV Architect?",
-     "Carichi il tuo CV in PDF o incolli il testo: l'AI lo riordina in un formato pulito. Poi incolli "
-     "l'annuncio (o il suo link) e ottieni un CV adattato all'offerta, un indice di compatibilità e la "
-     "lettera di presentazione. Infine puoi generare titolo, sezione Informazioni e post per LinkedIn."),
-    ("Che cos'è un CV ottimizzato per gli ATS?",
-     "Molte aziende usano software di selezione (ATS) che leggono il CV in automatico. CV Architect crea "
-     "documenti con struttura semplice e le parole chiave dell'annuncio, così il CV viene letto "
-     "correttamente e risulta pertinente."),
-    ("Quanto costa?",
-     "Non c'è abbonamento: compri crediti quando ti servono. Un credito vale una candidatura completa "
-     "(CV adattato, lettera di presentazione e testi LinkedIn). I pacchetti partono da 3,99 € e i crediti "
-     "valgono 24 mesi."),
-    ("In che formati posso scaricare il CV?",
-     "Il CV e la lettera di presentazione si scaricano in PDF, con diversi modelli grafici tra cui "
-     "scegliere. Sono disponibili anche i formati testo, Markdown e JSON."),
-    ("I miei dati sono al sicuro?",
-     "I dati sono conservati su server nell'Unione Europea e non vengono usati per addestrare modelli di "
-     "Intelligenza Artificiale. Puoi eliminare l'account e tutti i dati in qualsiasi momento dal menu."),
-]
+
+def price_from(packs: dict[str, CreditPack] | None = None) -> str:
+    """«1,99 €»: il prezzo più basso a candidatura del listino attuale."""
+    return format_euro(lowest_unit_cents(packs))
+
+
+def description(packs: dict[str, CreditPack] | None = None) -> str:
+    return ("Carica il tuo curriculum: l'Intelligenza Artificiale lo adatta a ogni offerta di lavoro, "
+            "lo ottimizza per gli ATS, scrive la lettera di presentazione e prepara il profilo LinkedIn. "
+            f"Da {price_from(packs)} a candidatura, senza abbonamento.")
+
+
+def faq(packs: dict[str, CreditPack] | None = None) -> list[tuple[str, str]]:
+    """Domande frequenti: mostrate anche nella pagina di benvenuto dell'app."""
+    return [
+        ("Come funziona CV Architect?",
+         "Carichi il tuo CV in PDF o incolli il testo: l'AI lo riordina in un formato pulito. Poi incolli "
+         "l'annuncio (o il suo link) e ottieni un CV adattato all'offerta, un indice di compatibilità e la "
+         "lettera di presentazione. Infine puoi generare titolo, sezione Informazioni e post per LinkedIn."),
+        ("Che cos'è un CV ottimizzato per gli ATS?",
+         "Molte aziende usano software di selezione (ATS) che leggono il CV in automatico. CV Architect crea "
+         "documenti con struttura semplice e le parole chiave dell'annuncio, così il CV viene letto "
+         "correttamente e risulta pertinente."),
+        ("Quanto costa?",
+         "Non c'è abbonamento: compri crediti quando ti servono. Un credito vale una candidatura completa "
+         "(CV adattato, lettera di presentazione e testi LinkedIn). Si parte da "
+         f"{price_from(packs)} a candidatura e i crediti valgono 24 mesi."),
+        ("In che formati posso scaricare il CV?",
+         "Il CV e la lettera di presentazione si scaricano in PDF, con diversi modelli grafici tra cui "
+         "scegliere. Sono disponibili anche i formati testo, Markdown e JSON."),
+        ("I miei dati sono al sicuro?",
+         "I dati sono conservati su server nell'Unione Europea e non vengono usati per addestrare modelli di "
+         "Intelligenza Artificiale. Puoi eliminare l'account e tutti i dati in qualsiasi momento dal menu."),
+    ]
+
 
 _STATIC_DIR = Path(streamlit.__file__).parent / "static"
 _ASSETS_DIR = Path(__file__).parent / "assets"
 
 
-def _price(cents: int) -> str:
-    return f"{cents / 100:.2f}".replace(".", ",")
-
-
-def _structured_data(base: str) -> str:
-    prices = [p.amount_cents for p in CREDIT_PACKS.values()]
+def _structured_data(base: str, packs: dict[str, CreditPack]) -> str:
+    prices = [p.amount_cents for p in packs.values()]
     data = [
         {
             "@context": "https://schema.org",
             "@type": "WebApplication",
             "name": config.APP_TITLE,
             "url": base + "/",
-            "description": DESCRIPTION,
+            "description": description(packs),
             "applicationCategory": "BusinessApplication",
             "operatingSystem": "Web",
             "inLanguage": "it",
@@ -95,7 +100,7 @@ def _structured_data(base: str) -> str:
             "@type": "FAQPage",
             "mainEntity": [
                 {"@type": "Question", "name": q, "acceptedAnswer": {"@type": "Answer", "text": a}}
-                for q, a in FAQ
+                for q, a in faq(packs)
             ],
         },
     ]
@@ -103,7 +108,7 @@ def _structured_data(base: str) -> str:
     return json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
 
 
-def _head(base: str, title: str, description: str, url: str) -> str:
+def _head(base: str, title: str, description: str, url: str, packs: dict[str, CreditPack]) -> str:
     e = html.escape
     robots = "noindex, nofollow" if config.SEO_NOINDEX else "index, follow"
     verification = (f'<meta name="google-site-verification" content="{e(config.GOOGLE_SITE_VERIFICATION)}" />'
@@ -130,7 +135,7 @@ def _head(base: str, title: str, description: str, url: str) -> str:
     <meta name="twitter:title" content="{e(title)}" />
     <meta name="twitter:description" content="{e(description)}" />
     <meta name="twitter:image" content="{base}/og-image.png" />
-    <script type="application/ld+json">{_structured_data(base)}</script>
+    <script type="application/ld+json">{_structured_data(base, packs)}</script>
     <style>
       .seo-landing {{ max-width: 720px; margin: 0 auto; padding: 48px 16px; color: #0F172A;
         font-family: "Source Sans", system-ui, -apple-system, "Segoe UI", sans-serif; line-height: 1.6; }}
@@ -142,12 +147,14 @@ def _head(base: str, title: str, description: str, url: str) -> str:
     </style>"""
 
 
-def _landing(base: str) -> str:
+def _landing(base: str, packs: dict[str, CreditPack]) -> str:
     e = html.escape
-    packs = "".join(
-        f"<li>{e(p.label)}: {_price(p.amount_cents)} €</li>" for p in CREDIT_PACKS.values()
+    price_list = "".join(
+        f"<li>{e(p.label)}: {e(p.price_label)}"
+        + (f" ({e(format_euro(p.unit_cents))} a candidatura)" if p.credits > 1 else "") + "</li>"
+        for p in packs.values()
     )
-    faq = "".join(f"<h3>{e(q)}</h3><p>{e(a)}</p>" for q, a in FAQ)
+    questions = "".join(f"<h3>{e(q)}</h3><p>{e(a)}</p>" for q, a in faq(packs))
     return f"""<main class="seo-landing">
       <h1>Il tuo CV su misura per ogni annuncio di lavoro</h1>
       <p>{e(config.APP_TITLE)} usa l'Intelligenza Artificiale per creare un curriculum vitae ottimizzato per
@@ -160,10 +167,11 @@ def _landing(base: str) -> str:
         <li><strong>LinkedIn</strong>: titolo, sezione Informazioni e post pronti da pubblicare.</li>
       </ol>
       <h2>Prezzi</h2>
-      <p>Nessun abbonamento. Un credito vale una candidatura completa e resta valido 24 mesi.</p>
-      <ul>{packs}</ul>
+      <p>Nessun abbonamento: da {e(price_from(packs))} a candidatura. Un credito vale una candidatura
+      completa e resta valido 24 mesi.</p>
+      <ul>{price_list}</ul>
       <h2>Domande frequenti</h2>
-      {faq}
+      {questions}
       <p><a href="{base}/?doc=termini">Termini e condizioni</a> · <a href="{base}/?doc=privacy">Privacy e cookie</a></p>
     </main>"""
 
@@ -173,25 +181,29 @@ def _streamlit_index() -> str:
     return (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
 
 
-@functools.cache
-def _page(doc: str | None) -> str:
+@functools.lru_cache(maxsize=16)
+def _page(doc: str | None, pack_list: tuple[CreditPack, ...]) -> str:
+    """Pagina per il documento e il listino dati (cambia listino → nuova pagina in cache)."""
     base = config.APP_BASE_URL
-    title, description = DOC_PAGES.get(doc, (TITLE, DESCRIPTION))
+    packs = {f"cv{p.credits}": p for p in pack_list}
+    title, desc = DOC_PAGES.get(doc, (TITLE, description(packs)))
     url = f"{base}/?doc={doc}" if doc in DOC_PAGES else f"{base}/"
     page = _streamlit_index()
     page = page.replace('<html lang="en">', '<html lang="it">', 1)
-    page = page.replace("<title>Streamlit</title>", _head(base, title, description, url), 1)
+    page = page.replace("<title>Streamlit</title>", _head(base, title, desc, url, packs), 1)
     page = page.replace('<link rel="shortcut icon" href="./favicon.png" />',
                         '<link rel="icon" type="image/png" href="./favicon.png" />', 1)
     page = page.replace("<noscript>You need to enable JavaScript to run this app.</noscript>",
                         "<noscript>Per usare CV Architect attiva JavaScript nel browser.</noscript>", 1)
     # Streamlit monta l'app in #root e ne sostituisce il contenuto.
-    return page.replace('<div id="root"></div>', f'<div id="root">{_landing(base)}</div>', 1)
+    return page.replace('<div id="root"></div>', f'<div id="root">{_landing(base, packs)}</div>', 1)
 
 
 async def index(request: Request) -> Response:
     doc = request.query_params.get("doc")
-    return HTMLResponse(_page(doc if doc in DOC_PAGES else None), headers={"Cache-Control": "no-cache"})
+    packs = await run_in_threadpool(credit_packs)  # legge il database (al più ogni 30 secondi)
+    return HTMLResponse(_page(doc if doc in DOC_PAGES else None, tuple(packs.values())),
+                        headers={"Cache-Control": "no-cache"})
 
 
 async def robots_txt(request: Request) -> Response:
