@@ -103,8 +103,9 @@ secondo la propria informativa: [https://stripe.com/it/privacy](https://stripe.c
 **Uso dei dati da parte del fornitore di Intelligenza Artificiale.** I testi vengono inviati ad Anthropic tramite
 l'interfaccia di programmazione (API) commerciale solo per produrre la risposta richiesta. Secondo le condizioni
 commerciali di Anthropic, i dati inviati tramite API **non vengono usati per addestrare i suoi modelli** e sono
-conservati solo per il periodo limitato previsto dalle sue condizioni, anche per controlli di sicurezza contro gli
-abusi ([PERIODO_CONSERVAZIONE_ANTHROPIC, da verificare nelle condizioni Anthropic in vigore]).
+cancellati automaticamente entro 30 giorni dalla ricezione o dalla generazione. Solo i contenuti segnalati dai suoi
+sistemi di sicurezza per violazioni delle norme d'uso possono essere conservati fino a 2 anni, oltre ai casi in cui la
+conservazione è richiesta dalla legge.
 
 L'elenco aggiornato dei fornitori è disponibile su richiesta a [EMAIL_CONTATTO].
 
@@ -132,9 +133,9 @@ chiederne copia a [EMAIL_CONTATTO].
 | Sessione di accesso (cookie) | 30 giorni, oppure fino all'uscita dall'Account |
 | Codici inviati per email | 15 minuti |
 | Registro delle operazioni con l'Intelligenza Artificiale | Fino alla chiusura dell'Account; dopo resta solo in forma anonima per le statistiche |
-| Dati di pagamento | [DURATA_CONSERVAZIONE_PAGAMENTI, es. «10 anni»], per obblighi fiscali e per la tutela in caso di contestazioni; alla chiusura dell'Account vengono scollegati dall'Account |
-| Log tecnici dei server | [DURATA_LOG, es. «fino a 30 giorni»], secondo le impostazioni del fornitore di hosting |
-| Messaggi inviati al Titolare | [DURATA_MESSAGGI, es. «24 mesi»] dalla risposta |
+| Dati di pagamento | 10 anni, per obblighi fiscali e per la tutela in caso di contestazioni; alla chiusura dell'Account vengono scollegati dall'Account |
+| Log tecnici dei server | Fino a 30 giorni, secondo le impostazioni del fornitore di hosting |
+| Messaggi inviati al Titolare | 24 mesi dalla risposta |
 
 ## 8. Sicurezza
 

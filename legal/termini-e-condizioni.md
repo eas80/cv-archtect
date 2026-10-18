@@ -73,8 +73,7 @@ fattura.
 5.4. I Crediti vengono accreditati sull'Account appena Stripe conferma il pagamento. I Crediti non sono denaro, non
 sono trasferibili ad altri Account e non sono convertibili in denaro, salvo quanto previsto dalla legge e dall'art. 6.
 
-5.5. I Crediti acquistati restano disponibili fino a [DURATA_VALIDITA_CREDITI, es. «24 mesi dall'acquisto» oppure
-«alla chiusura del Servizio»]. In caso di chiusura definitiva del Servizio, il Fornitore rimborsa i Crediti non usati
+5.5. I Crediti acquistati restano disponibili per 24 mesi dall'acquisto. In caso di chiusura definitiva del Servizio, il Fornitore rimborsa i Crediti non usati
 in proporzione al prezzo pagato.
 
 ## Art. 6 – Diritto di recesso
