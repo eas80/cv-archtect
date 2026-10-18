@@ -1,11 +1,11 @@
 # Termini e Condizioni di Servizio di CV Architect
 
-Ultimo aggiornamento: [DATA_ULTIMO_AGGIORNAMENTO]
+Ultimo aggiornamento: 18 ottobre 2026
 
 ## Art. 1 – Chi fornisce il Servizio
 
 1.1. Il servizio «CV Architect», accessibile all'indirizzo [NOME_SITO] (di seguito il «Servizio»), è fornito da
-[NOME_COGNOME_TITOLARE], persona fisica, residente in [INDIRIZZO_TITOLARE], codice fiscale [CODICE_FISCALE_TITOLARE]
+Antonio Esposito, persona fisica, residente a Parma
 (di seguito il «Fornitore»).
 
 1.2. Il Servizio è offerto a titolo personale, senza Partita IVA, nell'ambito di una fase sperimentale di test di

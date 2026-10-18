@@ -1,6 +1,6 @@
 # Informativa Privacy e Cookie di CV Architect
 
-Ultimo aggiornamento: [DATA_ULTIMO_AGGIORNAMENTO]
+Ultimo aggiornamento: 18 ottobre 2026
 
 Questa informativa spiega come vengono trattati i dati personali di chi usa il servizio «CV Architect» (di seguito il
 «Servizio»), ai sensi degli artt. 13 e 14 del Regolamento (UE) 2016/679 («GDPR») e del D.Lgs. 196/2003
@@ -8,7 +8,7 @@ Questa informativa spiega come vengono trattati i dati personali di chi usa il s
 
 ## 1. Titolare del trattamento
 
-Il Titolare del trattamento è [NOME_COGNOME_TITOLARE], persona fisica, residente in [INDIRIZZO_TITOLARE]
+Il Titolare del trattamento è Antonio Esposito, persona fisica, residente a Parma
 (di seguito il «Titolare»).
 
 Contatto per ogni richiesta sulla privacy: [EMAIL_CONTATTO].
@@ -92,10 +92,10 @@ indicato diversamente:
 | Fornitore | Servizio | Dove sono trattati i dati |
 |---|---|---|
 | Render Services, Inc. | Hosting dell'applicazione e log tecnici | Server nell'Unione Europea (Francoforte, Germania) |
-| Supabase, Inc. | Database (Account, candidature salvate, Crediti, pagamenti) | Server nell'Unione Europea ([REGIONE_DATABASE, es. Irlanda]) |
+| Supabase, Inc. | Database (Account, candidature salvate, Crediti, pagamenti) | Server nell'Unione Europea (Irlanda) |
 | Anthropic, PBC | Elaborazione dei testi con i modelli di Intelligenza Artificiale «Claude» | Stati Uniti (vedi punto 6) |
 | Sendinblue SAS (Brevo) | Invio delle email di servizio (codici di conferma e reset password, messaggi «Contattaci») | Unione Europea |
-| [FORNITORE_CASELLA_EMAIL, es. Google Ireland Ltd. (Gmail)] | Casella email che riceve i messaggi degli Utenti | [LUOGO_TRATTAMENTO] |
+| Google Ireland Ltd. (Gmail) | Casella email che riceve i messaggi degli Utenti | Unione Europea e Stati Uniti |
 
 **Stripe Payments Europe Ltd.** (Irlanda) tratta i dati di pagamento come **titolare autonomo** del trattamento,
 secondo la propria informativa: [https://stripe.com/it/privacy](https://stripe.com/it/privacy).
