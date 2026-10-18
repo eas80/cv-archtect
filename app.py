@@ -405,6 +405,7 @@ def render_welcome_page() -> None:
     with st.container(border=True):
         render_auth_forms()
     st.button("✉️ Hai domande? Contattaci", type="tertiary", key="welcome_contact", on_click=open_contact_dialog)
+    st.caption(legal_links())
 
 
 def render_auth_forms() -> None:
@@ -434,12 +435,16 @@ def render_auth_forms() -> None:
             help=f"Almeno {auth_service.MIN_PASSWORD_LENGTH} caratteri.",
         )
         confirm = st.text_input("Ripeti la password", type="password", key="register_confirm")
+        accepted = st.checkbox(f"Ho letto e accetto i {legal_link('termini', 'Termini e condizioni')} e "
+                               f"l'{legal_link('privacy', 'Informativa privacy')}", key="register_terms")
         if st.form_submit_button("Crea account", type="primary", use_container_width=True):
             if password != confirm:
                 st.error("Le due password non coincidono.")
+            elif not accepted:
+                st.error("Per creare l'account devi accettare i Termini e condizioni e l'Informativa privacy.")
             else:
                 try:
-                    user = auth_service.register(email, password)
+                    user = auth_service.register(email, password, terms_version=config.LEGAL_VERSION)
                     sign_in(user)
                     send_verification_code(user.id)
                     st.rerun()
@@ -580,6 +585,7 @@ def render_buy_credits(user: auth_service.User, key: str = "buy") -> None:
         "dal momento in cui inizio a usarli.",
         key=f"{key}_waiver",
     )
+    st.caption(f"Acquistando accetti i {legal_link('termini', 'Termini e condizioni')} (recesso: art. 6).")
     if st.button("Procedi al pagamento", key=f"{key}_go", type="primary", use_container_width=True,
                  disabled=not waiver, help=None if waiver else "Spunta la casella qui sopra per continuare."):
         waiver_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -722,6 +728,12 @@ def render_menu(user: auth_service.User) -> None:
             else:
                 menu_item("Crediti e acquisti", "toll", "credits", open_buy_dialog)
         menu_item("Contattaci", "mail", "contact", open_contact_dialog)
+        menu_html('<div class="cv-menu-label">Informazioni legali</div>')
+        menu_item("Termini e condizioni", "gavel", "terms", open_legal_page, "termini")
+        menu_item("Privacy e cookie", "shield", "privacy", open_legal_page, "privacy")
+        if not user.is_admin:
+            menu_item("Elimina il mio account", "person_remove", "delete_account",
+                      lambda: st.session_state.update(open_delete_account=True))
         menu_html('<div class="cv-menu-sep"></div>')
         menu_item("Esci", "logout", "logout", sign_out)
 
@@ -794,6 +806,81 @@ def contact_dialog() -> None:
 
 def open_contact_dialog() -> None:
     st.session_state.open_contact = True
+
+
+# --- Documenti legali ------------------------------------------------------------------
+LEGAL_DOCS = {
+    "termini": ("Termini e condizioni", "legal/termini-e-condizioni.md"),
+    "privacy": ("Privacy e cookie", "legal/privacy-e-cookie.md"),
+}
+
+
+@st.cache_data
+def read_legal_text(path: str) -> str:
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
+def legal_text(doc: str) -> str:
+    """Testo del documento con i dati che l'app conosce già (email di contatto, indirizzo del sito)."""
+    return (read_legal_text(LEGAL_DOCS[doc][1])
+            .replace("[EMAIL_CONTATTO]", config.CONTACT_EMAIL)
+            .replace("[NOME_SITO]", current_base_url()))
+
+
+def legal_link(doc: str, text: str | None = None) -> str:
+    """Link in Markdown al documento: si apre in una nuova scheda, senza perdere il lavoro in corso."""
+    return f"[{text or LEGAL_DOCS[doc][0]}]({current_base_url()}/?doc={doc})"
+
+
+def legal_links() -> str:
+    return f"{legal_link('termini')} · {legal_link('privacy')}"
+
+
+def close_legal_page() -> None:
+    st.query_params.pop("doc", None)
+    request_scroll_top()
+
+
+def render_legal_page(doc: str) -> None:
+    st.button("← Torna all'app", type="tertiary", key="legal_back", on_click=close_legal_page)
+    with st.container(border=True):
+        st.markdown(legal_text(doc))
+    st.caption(legal_links())
+
+
+def open_legal_page(doc: str) -> None:
+    st.query_params["doc"] = doc
+    request_scroll_top()
+
+
+@st.dialog("Elimina il mio account")
+def delete_account_dialog() -> None:
+    user = current_user()
+    if user is None:
+        return
+    if user.is_admin:
+        st.info("Gli account admin non si eliminano da qui: usa il Pannello admin o `manage_users.py`.")
+        return
+    lost = [f"i tuoi **{plural(user.credits, 'credito', 'crediti')}**, che non vengono rimborsati"] if user.credits else []
+    if user.has_applications_archive:
+        lost.append("tutte le **candidature salvate** in «Le mie candidature»")
+    st.markdown("Eliminiamo subito e per sempre il tuo account e i dati collegati. Perdi:\n"
+                + "\n".join(f"- {item}" for item in ["l'accesso con questa email", *lost]))
+    st.caption("Per obblighi di legge conserviamo i dati dei pagamenti, scollegati dall'account. "
+               "Se ti servono CV o documenti, scaricali prima di continuare. L'operazione non si può annullare.")
+    with st.form("delete_account_form", border=False):
+        password = st.text_input("Per confermare, scrivi la tua password", type="password")
+        if not st.form_submit_button("Elimina definitivamente l'account", type="primary", use_container_width=True):
+            return
+    try:
+        auth_service.delete_own_account(user.id, password)
+    except auth_service.AuthError as exc:
+        st.error(str(exc))
+        return
+    sign_out()
+    st.session_state.pending_toast = "Il tuo account è stato eliminato."
+    st.rerun()
 
 
 def open_pending_dialogs() -> None:
@@ -1954,6 +2041,12 @@ def main() -> None:
     # Il modulo «Contattaci» si apre in ogni pagina, anche prima dell'accesso.
     if st.session_state.pop("open_contact", False):
         contact_dialog()
+    elif st.session_state.pop("open_delete_account", False):
+        delete_account_dialog()
+    # Termini e privacy si aprono anche senza accesso, con un link del tipo ?doc=privacy.
+    if (doc := st.query_params.get("doc")) in LEGAL_DOCS:
+        render_legal_page(doc)
+        return
 
     payment = st.query_params.pop("payment", None)
     if payment in ("success", "cancel") and user is not None and render_payment_return(payment):

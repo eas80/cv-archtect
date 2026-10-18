@@ -1,5 +1,7 @@
 # Segreti e dati locali: non vanno mai nel repository
 .env
+.env.*
+!.env.example
 database.db
 database.db-journal
 logs/

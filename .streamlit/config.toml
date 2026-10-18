@@ -6,6 +6,10 @@ port = 8520
 [client]
 toolbarMode = "viewer"
 
+# Niente statistiche d'uso inviate a Streamlit dal browser degli utenti (vedi legal/privacy-e-cookie.md).
+[browser]
+gatherUsageStats = false
+
 # Blu definito per entrambi i temi, così l'app segue il tema chiaro/scuro del sistema.
 [theme.light]
 primaryColor = "#2563EB"

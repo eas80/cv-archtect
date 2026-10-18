@@ -67,6 +67,11 @@ EMAIL_CODE_MINUTES = 15
 EMAIL_CODE_MAX_ATTEMPTS = 5
 EMAIL_CODE_RESEND_SECONDS = 60
 
+# --- Documenti legali ---------------------------------------------------------
+# Testi in legal/*.md. Cambiando i testi in modo sostanziale si aggiorna la versione (data):
+# alla registrazione si salva quella accettata dall'utente.
+LEGAL_VERSION = "2026-10-18"
+
 # --- Scraper ----------------------------------------------------------------
 SCRAPER_TIMEOUT_SECONDS = 15
 SCRAPER_USER_AGENT = (

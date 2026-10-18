@@ -40,6 +40,9 @@ CREATE TABLE IF NOT EXISTS users (
 -- i nuovi partono non confermati.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE users ALTER COLUMN email_verified SET DEFAULT FALSE;
+-- Accettazione di Termini e Informativa privacy alla registrazione (versione = data dei testi).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_version TEXT;
 
 -- Codici a 6 cifre inviati per email (conferma dell'indirizzo, reset della password): uno per scopo.
 CREATE TABLE IF NOT EXISTS email_codes (

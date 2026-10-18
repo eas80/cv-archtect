@@ -100,17 +100,20 @@ def get_user(user_id: int) -> User | None:
     return _select_user("id = %(id)s", {"id": user_id})
 
 
-def register(email: str, password: str) -> User:
-    """Crea l'utente con email da confermare (poi va chiamato send_verification_code)."""
+def register(email: str, password: str, terms_version: str) -> User:
+    """Crea l'utente con email da confermare (poi va chiamato send_verification_code).
+
+    `terms_version` è la versione di Termini e Informativa privacy accettata: si registra con data e ora.
+    """
     email = _normalize_email(email)
     _check_password(password)
     try:
         with db.transaction() as conn:
             row = conn.execute(
-                "INSERT INTO users (email, password_hash, credits, is_admin) "
-                f"VALUES (%(email)s, %(pw)s, %(credits)s, %(admin)s) RETURNING {_USER_COLUMNS}",
+                "INSERT INTO users (email, password_hash, credits, is_admin, terms_accepted_at, terms_version) "
+                f"VALUES (%(email)s, %(pw)s, %(credits)s, %(admin)s, now(), %(terms)s) RETURNING {_USER_COLUMNS}",
                 {"email": email, "pw": _hash_secret(password), "credits": config.INITIAL_CREDITS,
-                 "admin": email in config.ADMIN_EMAILS, "tz": config.APP_TIMEZONE},
+                 "admin": email in config.ADMIN_EMAILS, "terms": terms_version, "tz": config.APP_TIMEZONE},
             ).fetchone()
     except errors.UniqueViolation as exc:
         raise AuthError("Esiste già un account con questa email. Se è tuo e non ricordi la password, "
@@ -408,6 +411,15 @@ def delete_user(email: str) -> None:
     with db.transaction() as conn:
         if not conn.execute("DELETE FROM users WHERE email = %s", (email.strip().lower(),)).rowcount:
             raise AuthError(f"Nessun utente con email {email}.")
+
+
+def delete_own_account(user_id: int, password: str) -> None:
+    """Eliminazione richiesta dall'utente stesso, confermata con la password (diritto all'oblio)."""
+    with db.transaction() as conn:
+        row = conn.execute("SELECT email, password_hash FROM users WHERE id = %s", (user_id,)).fetchone()
+    if row is None or not _verify_secret(password, row["password_hash"]):
+        raise AuthError("Password non corretta.")
+    delete_user(row["email"])
 
 
 def list_users() -> list[User]:
