@@ -58,6 +58,10 @@ Senza `BREVO_API_KEY` le email non partono e il loro contenuto (codice compreso)
 comodo in locale, da evitare in produzione. Gli account creati prima della conferma email risultano già
 confermati; `python manage_users.py verified <email> on` conferma a mano un indirizzo.
 
+Ogni nuova registrazione e ogni acquisto mandano un avviso a `NOTIFY_EMAIL` (se non impostata,
+`CONTACT_EMAIL`; vuota per disattivarli). L'oggetto inizia con l'ambiente: `[PROD]` per il ramo main,
+`[TEST]` per staging, `[LOCALE]` sul PC (si può forzare con `APP_ENV`).
+
 ## 3. Stripe (webhook)
 
 1. Dashboard Stripe → **Developers → Webhooks → Add endpoint**:

@@ -65,6 +65,8 @@ EMAIL_SENDER_NAME = os.getenv("EMAIL_SENDER_NAME", APP_TITLE).strip()
 # Destinatario dei messaggi inviati dal modulo «Contattaci».
 CONTACT_EMAIL = os.getenv("CONTACT_EMAIL", "cv.architect.info@gmail.com").strip()
 CONTACT_RESEND_SECONDS = 60
+# Destinatario degli avvisi su nuove registrazioni e acquisti (vuoto = nessun avviso).
+NOTIFY_EMAIL = os.getenv("NOTIFY_EMAIL", CONTACT_EMAIL).strip()
 EMAIL_CODE_MINUTES = 15
 EMAIL_CODE_MAX_ATTEMPTS = 5
 EMAIL_CODE_RESEND_SECONDS = 60
@@ -73,6 +75,11 @@ EMAIL_CODE_RESEND_SECONDS = 60
 # Testi in legal/*.md. Cambiando i testi in modo sostanziale si aggiorna la versione (data):
 # alla registrazione si salva quella accettata dall'utente.
 LEGAL_VERSION = "2026-10-19"
+
+# --- Ambiente -----------------------------------------------------------------
+# Nome dell'ambiente negli avvisi: APP_ENV se impostato, altrimenti dal ramo che Render pubblica.
+ENVIRONMENT = (os.getenv("APP_ENV", "").strip().upper()
+               or {"main": "PROD", "staging": "TEST"}.get(os.getenv("RENDER_GIT_BRANCH", ""), "LOCALE"))
 
 # --- SEO ----------------------------------------------------------------------
 # L'ambiente di test (ramo staging su Render) non va indicizzato dai motori di ricerca.

@@ -214,7 +214,10 @@ def register(email: str, password: str, terms_version: str, first_name: str, las
     except errors.UniqueViolation as exc:
         raise AuthError("Esiste già un account con questa email. Se è tuo e non ricordi la password, "
                         "usa «Password dimenticata».") from exc
-    return _to_user(row)
+    user = _to_user(row)
+    email_service.notify_admin(f"Nuova registrazione: {user.full_name}", [
+        f"Nome: {user.full_name}", f"Email: {user.email}", f"Crediti iniziali: {user.credits}"])
+    return user
 
 
 def set_name(user_id: int, first_name: str, last_name: str) -> User:

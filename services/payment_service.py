@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import stripe
 
 import config
-from services import auth_service
+from services import auth_service, email_service
 
 log = logging.getLogger(__name__)
 
@@ -233,4 +233,19 @@ def fulfill_checkout(session) -> int:
         log.info("Sessione %s già erogata", session.id)
         return 0
     log.info("Accreditati %s crediti all'utente %s (sessione %s)", credits, user_id, session.id)
+    _notify_purchase(session, user_id, credits)
     return credits
+
+
+def _notify_purchase(session, user_id: int, credits: int) -> None:
+    try:
+        user = auth_service.get_user(user_id)
+        who = f"{user.full_name or '(nome mancante)'} <{user.email}>" if user else f"utente {user_id}"
+        price = format_euro(session.amount_total)
+        email_service.notify_admin(f"Acquisto: {credits} candidature, {price}", [
+            f"Cliente: {who}", f"Pacchetto: {credits} candidature", f"Importo: {price}",
+            f"Saldo crediti: {user.credits if user else '?'}",
+            f"Stripe: {'live (pagamento vero)' if session.livemode else 'test (pagamento di prova)'}",
+            f"Sessione: {session.id}"])
+    except Exception:
+        log.exception("Avviso di acquisto non inviato (sessione %s)", session.id)

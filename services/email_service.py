@@ -7,6 +7,7 @@ così i codici restano utilizzabili durante le prove.
 
 import html
 import logging
+import threading
 
 import requests
 
@@ -52,6 +53,29 @@ def send_contact_message(name: str, reply_to: str, topic: str, message: str, acc
 </div>"""
     _send(config.CONTACT_EMAIL, f"[{config.APP_TITLE}] {topic} — {name}", body, text,
           reply_to={"email": reply_to, "name": name})
+
+
+def notify_admin(subject: str, lines: list[str]) -> None:
+    """Avviso all'amministratore (NOTIFY_EMAIL) con l'ambiente nell'oggetto, es. «[PROD] Nuova registrazione».
+
+    Parte in background e gli errori finiscono solo nel log: un avviso non deve mai bloccare
+    la registrazione dell'utente né l'erogazione dei crediti.
+    """
+    if not config.NOTIFY_EMAIL:
+        return
+    subject = f"[{config.ENVIRONMENT}] {subject}"
+    lines = [*lines, f"Ambiente: {config.ENVIRONMENT} ({config.APP_BASE_URL})"]
+    text = "\n".join(lines)
+    body = ('<div style="font-family:Arial,sans-serif;font-size:15px;color:#111827;max-width:640px">'
+            + "<br>".join(html.escape(line) for line in lines) + "</div>")
+
+    def send() -> None:
+        try:
+            _send(config.NOTIFY_EMAIL, subject, body, text)
+        except Exception:
+            log.exception("Avviso «%s» non inviato", subject)
+
+    threading.Thread(target=send, name="notify-admin", daemon=True).start()
 
 
 def _send(to: str, subject: str, html_body: str, text_body: str, reply_to: dict | None = None) -> None:
