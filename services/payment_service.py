@@ -121,6 +121,21 @@ def _client() -> stripe.StripeClient:
     return stripe.StripeClient(config.STRIPE_SECRET_KEY)
 
 
+def _customer_id(client: stripe.StripeClient, user: auth_service.User, renew: bool = False) -> str:
+    """Cliente Stripe dell'utente, con nome, cognome ed email: si crea al primo acquisto e poi si riusa."""
+    live = not config.STRIPE_TEST_MODE
+    if not renew and (customer_id := auth_service.get_stripe_customer(user.id, live)):
+        return customer_id
+    customer = client.v1.customers.create(params={
+        "email": user.email,
+        "name": user.full_name,
+        "preferred_locales": ["it"],
+        "metadata": {"user_id": str(user.id)},
+    })
+    auth_service.set_stripe_customer(user.id, live, customer.id)
+    return customer.id
+
+
 def create_checkout(user: auth_service.User, pack_id: str, base_url: str | None = None,
                     withdrawal_waiver_at: str | None = None) -> tuple[str, str]:
     """Crea una Checkout Session per il pacchetto; restituisce (id sessione, URL di pagamento).
@@ -131,31 +146,40 @@ def create_checkout(user: auth_service.User, pack_id: str, base_url: str | None 
     """
     pack = credit_packs()[pack_id]
     base_url = (base_url or config.APP_BASE_URL).rstrip("/")
-    try:
-        session = _client().v1.checkout.sessions.create(params={
-            "mode": "payment",
-            "line_items": [{
-                "quantity": 1,
-                "price_data": {
-                    "currency": config.STRIPE_CURRENCY,
-                    "unit_amount": pack.amount_cents,
-                    "product_data": {
-                        "name": f"{config.APP_TITLE} · {pack.label}",
-                        "description": f"{pack.credits} crediti: 1 credito = 1 candidatura completa "
-                                       "(CV, annuncio e LinkedIn)",
-                    },
+    client = _client()
+    params = {
+        "mode": "payment",
+        "line_items": [{
+            "quantity": 1,
+            "price_data": {
+                "currency": config.STRIPE_CURRENCY,
+                "unit_amount": pack.amount_cents,
+                "product_data": {
+                    "name": f"{config.APP_TITLE} · {pack.label}",
+                    "description": f"{pack.credits} crediti: 1 credito = 1 candidatura completa "
+                                   "(CV, annuncio e LinkedIn)",
                 },
-            }],
-            "customer_email": user.email,
-            "client_reference_id": str(user.id),
-            # Candidature e prezzo restano nel pagamento: se intanto il listino cambia, si eroga
-            # comunque ciò che l'utente ha comprato.
-            "metadata": {"user_id": str(user.id), "pack_id": pack_id,
-                         "credits": str(pack.credits), "amount_cents": str(pack.amount_cents),
-                         **({"withdrawal_waiver_at": withdrawal_waiver_at} if withdrawal_waiver_at else {})},
-            "success_url": f"{base_url}/?payment=success",
-            "cancel_url": f"{base_url}/?payment=cancel",
-        })
+            },
+        }],
+        "client_reference_id": str(user.id),
+        # Candidature e prezzo restano nel pagamento: se intanto il listino cambia, si eroga
+        # comunque ciò che l'utente ha comprato.
+        "metadata": {"user_id": str(user.id), "pack_id": pack_id, "customer_name": user.full_name,
+                     "credits": str(pack.credits), "amount_cents": str(pack.amount_cents),
+                     **({"withdrawal_waiver_at": withdrawal_waiver_at} if withdrawal_waiver_at else {})},
+        "success_url": f"{base_url}/?payment=success",
+        "cancel_url": f"{base_url}/?payment=cancel",
+    }
+    try:
+        try:
+            session = client.v1.checkout.sessions.create(
+                params={**params, "customer": _customer_id(client, user)})
+        except stripe.InvalidRequestError as exc:
+            # Cliente eliminato dalla dashboard di Stripe: se ne crea uno nuovo.
+            if exc.code != "resource_missing" or exc.param != "customer":
+                raise
+            session = client.v1.checkout.sessions.create(
+                params={**params, "customer": _customer_id(client, user, renew=True)})
     except stripe.StripeError as exc:
         log.exception("Creazione Checkout Session fallita")
         raise PaymentError(f"Impossibile avviare il pagamento: {exc.user_message or exc}") from exc

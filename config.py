@@ -72,7 +72,7 @@ EMAIL_CODE_RESEND_SECONDS = 60
 # --- Documenti legali ---------------------------------------------------------
 # Testi in legal/*.md. Cambiando i testi in modo sostanziale si aggiorna la versione (data):
 # alla registrazione si salva quella accettata dall'utente.
-LEGAL_VERSION = "2026-10-18"
+LEGAL_VERSION = "2026-10-19"
 
 # --- SEO ----------------------------------------------------------------------
 # L'ambiente di test (ramo staging su Render) non va indicizzato dai motori di ricerca.

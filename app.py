@@ -435,6 +435,11 @@ def render_auth_forms() -> None:
             st.caption(f"Ogni nuovo account riceve {config.INITIAL_CREDITS} crediti.")
         elif free_mode_enabled():
             st.caption("La registrazione è gratuita: puoi sistemare il CV a mano e acquistare crediti per l'AI.")
+        first_col, last_col = st.columns(2)
+        first_name = first_col.text_input("Nome", key="register_first_name",
+                                          max_chars=auth_service.MAX_NAME_LENGTH, autocomplete="given-name")
+        last_name = last_col.text_input("Cognome", key="register_last_name",
+                                        max_chars=auth_service.MAX_NAME_LENGTH, autocomplete="family-name")
         email = st.text_input("Email", key="register_email")
         password = st.text_input(
             "Password", type="password", key="register_password",
@@ -450,7 +455,8 @@ def render_auth_forms() -> None:
                 st.error("Per creare l'account devi accettare i Termini e condizioni e l'Informativa privacy.")
             else:
                 try:
-                    user = auth_service.register(email, password, terms_version=config.LEGAL_VERSION)
+                    user = auth_service.register(email, password, terms_version=config.LEGAL_VERSION,
+                                                 first_name=first_name, last_name=last_name)
                     sign_in(user)
                     send_verification_code(user.id)
                     st.rerun()
@@ -596,20 +602,49 @@ def render_buy_credits(user: auth_service.User, key: str = "buy") -> None:
         "dal momento in cui inizio a usarli.",
         key=f"{key}_waiver",
     )
+    # Account creati prima che nome e cognome si chiedessero alla registrazione: servono per Stripe.
+    first_name = last_name = None
+    if not user.full_name:
+        st.caption("Per il pagamento servono nome e cognome: compariranno sulla ricevuta di Stripe.")
+        first_col, last_col = st.columns(2)
+        first_name = first_col.text_input("Nome", key=f"{key}_first_name", max_chars=auth_service.MAX_NAME_LENGTH)
+        last_name = last_col.text_input("Cognome", key=f"{key}_last_name", max_chars=auth_service.MAX_NAME_LENGTH)
     st.caption(f"I crediti valgono {config.CREDITS_VALIDITY_MONTHS} mesi dall'acquisto. Acquistando accetti i "
                f"{legal_link('termini', 'Termini e condizioni')} (recesso: art. 6).")
-    if st.button("Procedi al pagamento", key=f"{key}_go", type="primary", use_container_width=True,
-                 disabled=not waiver, help=None if waiver else "Spunta la casella qui sopra per continuare."):
-        waiver_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    checkout = st.session_state.get("checkout")
+    if waiver and checkout and checkout[0] == pack_id:
+        render_pay_link(checkout[2])
+        return
+    # Preparare il pagamento su Stripe richiede qualche secondo: il pulsante si disattiva subito e
+    # mostra l'attesa, così non si clicca più volte. Quando il pagamento è pronto, al suo posto
+    # compare il pulsante che apre Stripe.
+    slot = st.empty()
+    with slot:
+        go = ai_button("Procedi al pagamento", "⏳ Preparo il pagamento sicuro...", key=f"{key}_go",
+                       disabled=not waiver)
+    if not go:
+        if not waiver:
+            st.caption("Spunta la casella qui sopra per continuare.")
+        return
+    with st.spinner("Collegamento a Stripe in corso..."):
         try:
+            if first_name is not None:
+                user = auth_service.set_name(user.id, first_name, last_name)
+            waiver_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
             st.session_state.checkout = (pack_id, *payment_service.create_checkout(
                 user, pack_id, current_base_url(), withdrawal_waiver_at=waiver_at))
-        except payment_service.PaymentError as exc:
+        except (auth_service.AuthError, payment_service.PaymentError) as exc:
+            slot.empty()
             st.error(str(exc))
-    checkout = st.session_state.get("checkout")
-    if checkout and checkout[0] == pack_id:
-        st.link_button("💳 Paga con Stripe", checkout[2], type="primary", use_container_width=True)
-        st.caption("Il pagamento si apre in una nuova scheda: i crediti si attivano qui appena è confermato.")
+            st.button("Riprova", key=f"{key}_retry")
+            return
+    with slot.container():
+        render_pay_link(st.session_state.checkout[2])
+
+
+def render_pay_link(url: str) -> None:
+    st.link_button("💳 Paga con Stripe", url, type="primary", use_container_width=True)
+    st.caption("Il pagamento si apre in una nuova scheda: i crediti si attivano qui appena è confermato.")
 
 
 @st.dialog("🪙 Crediti")
@@ -2021,6 +2056,7 @@ def render_admin_panel() -> None:
     users = auth_service.users_overview()
     table = pd.DataFrame([{
         "Email": u["email"],
+        "Nome": " ".join(filter(None, (u["first_name"], u["last_name"]))),
         "Crediti": u["credits"],
         "Admin": bool(u["is_admin"]),
         "Email confermata": bool(u["email_verified"]),

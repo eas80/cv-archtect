@@ -43,6 +43,12 @@ ALTER TABLE users ALTER COLUMN email_verified SET DEFAULT FALSE;
 -- Accettazione di Termini e Informativa privacy alla registrazione (versione = data dei testi).
 ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_version TEXT;
+-- Nome e cognome, chiesti alla registrazione (gli account precedenti li inseriscono al primo acquisto).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name TEXT;
+-- Cliente Stripe dell'utente, con nome ed email: uno per modalità, perché test e live sono separati.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_customer_test TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_customer_live TEXT;
 
 -- Codici a 6 cifre inviati per email (conferma dell'indirizzo, reset della password): uno per scopo.
 CREATE TABLE IF NOT EXISTS email_codes (

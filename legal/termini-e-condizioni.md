@@ -1,6 +1,6 @@
 # Termini e Condizioni di Servizio di CV Architect
 
-Ultimo aggiornamento: 18 ottobre 2026
+Ultimo aggiornamento: 19 ottobre 2026
 
 ## Art. 1 – Chi fornisce il Servizio
 
@@ -45,7 +45,7 @@ evoluzione del Servizio. Le modifiche sostanziali che riguardano i Crediti acqui
 
 ## Art. 4 – Registrazione e Account
 
-4.1. Per usare il Servizio è necessario registrarsi con un indirizzo email valido e una password, e confermare
+4.1. Per usare il Servizio è necessario registrarsi con nome, cognome, un indirizzo email valido e una password, e confermare
 l'indirizzo email tramite il codice inviato. Il Servizio è riservato a persone maggiorenni.
 
 4.2. L'Utente si impegna a fornire dati veri e a custodire la password. È responsabile delle attività svolte con il

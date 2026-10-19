@@ -1,6 +1,6 @@
 # Informativa Privacy e Cookie di CV Architect
 
-Ultimo aggiornamento: 18 ottobre 2026
+Ultimo aggiornamento: 19 ottobre 2026
 
 Questa informativa spiega come vengono trattati i dati personali di chi usa il servizio «CV Architect» (di seguito il
 «Servizio»), ai sensi degli artt. 13 e 14 del Regolamento (UE) 2016/679 («GDPR») e del D.Lgs. 196/2003
@@ -20,6 +20,7 @@ l'attività svolta.
 
 ### 2.1. Dati dell'Account
 
+- nome e cognome;
 - indirizzo email;
 - password, conservata solo in forma cifrata con un algoritmo non reversibile (hash): il Titolare non può leggerla;
 - stato di conferma dell'email, saldo dei Crediti, data di registrazione.
@@ -34,7 +35,9 @@ l'attività svolta.
 ### 2.3. Dati di pagamento
 
 - identificativo della sessione di pagamento Stripe, pacchetto acquistato, importo, valuta, data e consenso alla
-  perdita del diritto di recesso.
+  perdita del diritto di recesso;
+- identificativo del cliente presso Stripe. Per il pagamento e la ricevuta il Titolare comunica a Stripe nome,
+  cognome e indirizzo email dell'Utente.
 
 Il Titolare **non riceve né conserva** i dati della carta di pagamento, che sono trattati direttamente da Stripe.
 

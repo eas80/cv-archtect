@@ -23,7 +23,9 @@ MIN_PASSWORD_LENGTH = 8
 
 # Data di creazione già nel fuso dell'app, come testo «AAAA-MM-GG HH:MM:SS».
 _LOCAL_CREATED_AT = "to_char(created_at AT TIME ZONE %(tz)s, 'YYYY-MM-DD HH24:MI:SS') AS created_at"
-_USER_COLUMNS = f"id, email, credits, is_admin, can_save_applications, email_verified, {_LOCAL_CREATED_AT}"
+_USER_COLUMNS = (f"id, email, credits, is_admin, can_save_applications, email_verified, {_LOCAL_CREATED_AT}, "
+                 "first_name, last_name")
+MAX_NAME_LENGTH = 60
 
 
 class AuthError(Exception):
@@ -40,10 +42,17 @@ class User:
     # Funzione «Le mie candidature», attivata per singolo utente dal pannello admin (gli admin l'hanno sempre).
     can_save_applications: bool
     email_verified: bool
+    # Vuoti per gli account creati prima che si chiedessero alla registrazione.
+    first_name: str = ""
+    last_name: str = ""
 
     @property
     def has_applications_archive(self) -> bool:
         return self.is_admin or self.can_save_applications
+
+    @property
+    def full_name(self) -> str:
+        return f"{self.first_name} {self.last_name}".strip()
 
 
 def _hash_secret(secret: str) -> str:
@@ -81,7 +90,17 @@ def _to_user(row: dict | None) -> User | None:
     if row is None:
         return None
     return User(row["id"], row["email"], row["credits"], row["is_admin"], row["created_at"],
-                row["can_save_applications"], row["email_verified"])
+                row["can_save_applications"], row["email_verified"], row["first_name"] or "", row["last_name"] or "")
+
+
+def _check_name(first_name: str, last_name: str) -> tuple[str, str]:
+    """Nome e cognome ripuliti dagli spazi in più; AuthError se mancano o sono troppo lunghi."""
+    first, last = (" ".join((n or "").split()) for n in (first_name, last_name))
+    if not first or not last:
+        raise AuthError("Inserisci nome e cognome.")
+    if len(first) > MAX_NAME_LENGTH or len(last) > MAX_NAME_LENGTH:
+        raise AuthError(f"Nome e cognome possono avere al massimo {MAX_NAME_LENGTH} caratteri ciascuno.")
+    return first, last
 
 
 def _select_user(where: str, params: dict) -> User | None:
@@ -171,20 +190,23 @@ def get_user(user_id: int) -> User | None:
     return _select_user("id = %(id)s", {"id": user_id})
 
 
-def register(email: str, password: str, terms_version: str) -> User:
+def register(email: str, password: str, terms_version: str, first_name: str, last_name: str) -> User:
     """Crea l'utente con email da confermare (poi va chiamato send_verification_code).
 
     `terms_version` è la versione di Termini e Informativa privacy accettata: si registra con data e ora.
     """
+    first_name, last_name = _check_name(first_name, last_name)
     email = _normalize_email(email)
     _check_password(password)
     try:
         with db.transaction() as conn:
             row = conn.execute(
-                "INSERT INTO users (email, password_hash, credits, is_admin, terms_accepted_at, terms_version) "
-                f"VALUES (%(email)s, %(pw)s, 0, %(admin)s, now(), %(terms)s) RETURNING {_USER_COLUMNS}",
-                {"email": email, "pw": _hash_secret(password),
-                 "admin": email in config.ADMIN_EMAILS, "terms": terms_version, "tz": config.APP_TIMEZONE},
+                "INSERT INTO users (email, password_hash, credits, is_admin, terms_accepted_at, terms_version, "
+                "first_name, last_name) "
+                f"VALUES (%(email)s, %(pw)s, 0, %(admin)s, now(), %(terms)s, %(first)s, %(last)s) "
+                f"RETURNING {_USER_COLUMNS}",
+                {"email": email, "pw": _hash_secret(password), "admin": email in config.ADMIN_EMAILS,
+                 "terms": terms_version, "first": first_name, "last": last_name, "tz": config.APP_TIMEZONE},
             ).fetchone()
             if config.INITIAL_CREDITS:
                 _add_lot(conn, row["id"], config.INITIAL_CREDITS, "initial")
@@ -193,6 +215,32 @@ def register(email: str, password: str, terms_version: str) -> User:
         raise AuthError("Esiste già un account con questa email. Se è tuo e non ricordi la password, "
                         "usa «Password dimenticata».") from exc
     return _to_user(row)
+
+
+def set_name(user_id: int, first_name: str, last_name: str) -> User:
+    """Nome e cognome di un account (per gli account creati prima che si chiedessero)."""
+    first_name, last_name = _check_name(first_name, last_name)
+    with db.transaction() as conn:
+        conn.execute("UPDATE users SET first_name = %s, last_name = %s WHERE id = %s",
+                     (first_name, last_name, user_id))
+    return get_user(user_id)
+
+
+def _stripe_customer_column(livemode: bool) -> str:
+    return "stripe_customer_live" if livemode else "stripe_customer_test"
+
+
+def get_stripe_customer(user_id: int, livemode: bool) -> str | None:
+    with db.transaction() as conn:
+        row = conn.execute(f"SELECT {_stripe_customer_column(livemode)} AS cid FROM users WHERE id = %s",
+                           (user_id,)).fetchone()
+    return row["cid"] if row else None
+
+
+def set_stripe_customer(user_id: int, livemode: bool, customer_id: str | None) -> None:
+    with db.transaction() as conn:
+        conn.execute(f"UPDATE users SET {_stripe_customer_column(livemode)} = %s WHERE id = %s",
+                     (customer_id, user_id))
 
 
 def login(email: str, password: str) -> User:
@@ -415,7 +463,7 @@ def users_overview() -> list[dict]:
     with db.transaction() as conn:
         conn.execute(_EXPIRE_DUE_LOTS, {"uid": None})
         return conn.execute("""
-            SELECT u.email, u.credits, u.is_admin, u.can_save_applications, u.email_verified,
+            SELECT u.email, u.first_name, u.last_name, u.credits, u.is_admin, u.can_save_applications, u.email_verified,
                    to_char(u.created_at AT TIME ZONE %(tz)s, 'YYYY-MM-DD HH24:MI:SS') AS created_at,
                    (SELECT COUNT(*) FROM usage_log l WHERE l.user_id = u.id) AS claude_calls,
                    (SELECT COUNT(*) FROM payments p WHERE p.user_id = u.id AND p.livemode = %(live)s) AS purchases,
