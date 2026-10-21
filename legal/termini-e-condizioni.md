@@ -1,6 +1,6 @@
 # Termini e Condizioni di Servizio di CV Architect
 
-Ultimo aggiornamento: 19 ottobre 2026
+Ultimo aggiornamento: 21 ottobre 2026
 
 ## Art. 1 – Chi fornisce il Servizio
 
@@ -33,8 +33,8 @@ disponibile nel Servizio.
 - analizzare un'offerta di lavoro e ottenere un CV adattato, un indice di compatibilità e una lettera di
   presentazione;
 - ottenere proposte di testi per il proprio profilo LinkedIn;
-- scaricare i documenti in vari formati e, se la funzione è attiva per il suo Account, salvare le candidature
-  nell'area «Le mie candidature».
+- scaricare i documenti in vari formati e, se la funzione è attiva per il suo Account, ritrovare le candidature
+  nell'area «Le mie candidature», dove si salvano automaticamente mentre l'Utente lavora.
 
 3.2. I Contenuti Generati sono prodotti in modo automatico da modelli di Intelligenza Artificiale forniti da terzi
 (Anthropic, modelli «Claude»). L'Utente è informato che sta interagendo con un sistema di Intelligenza Artificiale
@@ -60,11 +60,20 @@ Crediti non ancora usati vanno persi, salvo il diritto di recesso dell'art. 6.3 
 5.1. Le funzioni basate sull'Intelligenza Artificiale richiedono Crediti, acquistabili in pacchetti ai prezzi indicati
 nel Servizio al momento dell'acquisto. I prezzi sono espressi in euro e sono finali per l'Utente.
 
-5.2. Un Credito dà diritto a una Candidatura completa: lettura del CV, adattamento a un'offerta di lavoro con lettera
-di presentazione, modifiche e testi per LinkedIn. Il Credito viene scalato una sola volta per Candidatura, al primo
-download o salvataggio di un documento oppure alla generazione dei testi per LinkedIn. Per contenere l'uso dei
-sistemi di Intelligenza Artificiale, il Servizio può applicare un numero massimo di operazioni per Candidatura e per
-giorno, indicato nel Servizio quando viene raggiunto.
+5.2. Un Credito dà diritto a una Candidatura completa, cioè a un ciclo di generazione: lettura del CV, adattamento a
+un'offerta di lavoro con indice di compatibilità e lettera di presentazione, testi per LinkedIn, ciascuno una volta,
+insieme alle modifiche e alle traduzioni con l'Intelligenza Artificiale richieste prima della consegna. Il Credito
+viene scalato una sola volta per Candidatura, alla consegna: il primo download o salvataggio di un documento oppure
+la generazione dei testi per LinkedIn. Per contenere l'uso dei sistemi di Intelligenza Artificiale, il Servizio può
+applicare un numero massimo di operazioni per Candidatura e per giorno, indicato nel Servizio quando viene raggiunto.
+
+5.2-bis. Dopo la consegna l'Utente può scaricare i documenti della Candidatura e correggerli a mano senza usare altri
+Crediti; se non li ha ancora generati, anche i testi per LinkedIn restano compresi. Ogni ulteriore elaborazione con
+l'Intelligenza Artificiale (nuove modifiche, traduzioni, altri testi per LinkedIn, un'altra offerta di lavoro o un
+altro CV) costituisce una nuova Candidatura e richiede un nuovo Credito, scalato alla sua consegna. Le Candidature
+consegnate e salvate nell'area «Le mie candidature» restano invariate e si possono scaricare senza altri Crediti; per
+modificarle se ne crea una nuova versione, che costituisce una nuova Candidatura. Il Servizio avvisa l'Utente prima di
+ogni operazione che richiede un nuovo Credito.
 
 5.3. I pagamenti sono gestiti da Stripe Payments Europe Ltd. («Stripe»). Il Fornitore non riceve né conserva i dati
 della carta di pagamento. Dopo il pagamento Stripe invia all'Utente la ricevuta per email. Il Fornitore non emette

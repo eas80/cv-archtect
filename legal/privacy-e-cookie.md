@@ -1,6 +1,6 @@
 # Informativa Privacy e Cookie di CV Architect
 
-Ultimo aggiornamento: 19 ottobre 2026
+Ultimo aggiornamento: 21 ottobre 2026
 
 Questa informativa spiega come vengono trattati i dati personali di chi usa il servizio «CV Architect» (di seguito il
 «Servizio»), ai sensi degli artt. 13 e 14 del Regolamento (UE) 2016/679 («GDPR») e del D.Lgs. 196/2003
@@ -68,7 +68,7 @@ esplicito manifestato con l'inserimento (art. 9, par. 2, lett. a GDPR).
 |---|---|---|
 | Creare e gestire l'Account, confermare l'email, reimpostare la password | 2.1 | Esecuzione del contratto (art. 6.1.b GDPR) |
 | Fornire il Servizio: lettura del CV, adattamento all'annuncio, lettere e testi LinkedIn con l'Intelligenza Artificiale | 2.2 | Esecuzione del contratto (art. 6.1.b) |
-| Salvare le candidature nell'area «Le mie candidature», quando l'Utente sceglie di farlo | 2.2 | Esecuzione del contratto (art. 6.1.b) |
+| Salvare automaticamente le candidature, anche non completate, nell'area «Le mie candidature», se la funzione è attiva per l'Account | 2.2 | Esecuzione del contratto (art. 6.1.b) |
 | Gestire acquisti, Crediti, rimborsi e consenso al recesso | 2.3, 2.4 | Esecuzione del contratto (art. 6.1.b) e obblighi di legge (art. 6.1.c) |
 | Sicurezza del Servizio, prevenzione degli abusi, limiti d'uso, statistiche aggregate | 2.4 | Legittimo interesse del Titolare (art. 6.1.f) |
 | Rispondere alle richieste inviate dall'Utente | 2.5 | Esecuzione di misure richieste dall'interessato (art. 6.1.b) |
@@ -130,8 +130,8 @@ chiederne copia a [EMAIL_CONTATTO].
 
 | Dati | Durata |
 |---|---|
-| CV e annunci usati nel percorso guidato senza salvarli | Solo per la durata della sessione di lavoro nel browser: non vengono salvati nel database |
-| Candidature salvate in «Le mie candidature» | Finché l'Utente non le elimina o non chiude l'Account |
+| CV e annunci usati nel percorso guidato, per gli Account senza «Le mie candidature» | Solo per la durata della sessione di lavoro nel browser: non vengono salvati nel database |
+| Candidature salvate in «Le mie candidature», comprese le bozze salvate automaticamente | Finché l'Utente non le elimina o non chiude l'Account |
 | Dati dell'Account | Fino alla chiusura dell'Account |
 | Sessione di accesso (cookie) | 30 giorni, oppure fino all'uscita dall'Account |
 | Codici inviati per email | 15 minuti |

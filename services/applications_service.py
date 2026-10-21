@@ -31,11 +31,24 @@ class SavedApplication:
     # Per riaprire la candidatura (nulli in quelle salvate prima di questa funzione).
     base_cv: ResumeData | None
     job_text: str | None
-    match: JobMatchResult
+    # None nelle bozze con il solo CV, salvate prima di scegliere l'annuncio.
+    match: JobMatchResult | None
+    # False finché il credito della candidatura non è stato scalato: niente download dall'archivio.
+    paid: bool
 
     @property
     def title(self) -> str:
-        return f"{self.company_name} - {self.job_title}"
+        if name := " - ".join(x for x in (self.company_name, self.job_title) if x):
+            return name
+        if self.match is None:
+            return f"CV di {self.cv.full_name}" if self.cv.full_name else "CV"
+        return "Candidatura senza titolo"
+
+    @property
+    def stage(self) -> str:
+        if self.match is None:
+            return "CV e LinkedIn" if self.linkedin else "solo CV"
+        return "completa" if self.linkedin else "CV e lettera"
 
 
 def init_db() -> None:
@@ -52,8 +65,10 @@ def _to_application(row: dict) -> SavedApplication:
     cv = ResumeData.model_validate(row["cv_json"])
     if row["match_json"]:
         match = JobMatchResult.model_validate(row["match_json"])
-    else:
+    elif row["cover_letter"]:  # salvata prima che si conservasse il risultato completo
         match = JobMatchResult(match_score=row["match_score"] or 0, tailored_cv=cv, cover_letter=row["cover_letter"])
+    else:
+        match = None
     return SavedApplication(
         id=row["id"],
         company_name=row["company_name"],
@@ -66,13 +81,14 @@ def _to_application(row: dict) -> SavedApplication:
         base_cv=ResumeData.model_validate(row["base_cv_json"]) if row["base_cv_json"] else None,
         job_text=row["job_text"],
         match=match,
+        paid=row["paid"],
     )
 
 
 _SELECT = (
     "SELECT id, company_name, job_title, "
     "to_char(created_at AT TIME ZONE %(tz)s, 'YYYY-MM-DD HH24:MI:SS') AS created_at, "
-    "cv_json, cover_letter, linkedin_json, match_score, base_cv_json, job_text, match_json "
+    "cv_json, cover_letter, linkedin_json, match_score, base_cv_json, job_text, match_json, paid "
     "FROM saved_applications"
 )
 
@@ -101,40 +117,40 @@ class ApplicationStore:
                                self._params(id=application_id)).fetchone()
         return _to_application(row) if row else None
 
-    def save(self, company_name: str, job_title: str, match: JobMatchResult, base_cv: ResumeData,
-             job_text: str | None, linkedin: dict[str, LinkedInContent] | None = None) -> int:
+    def _values(self, base_cv: ResumeData, match: JobMatchResult | None, job_text: str | None,
+                linkedin: dict[str, LinkedInContent] | None, paid: bool, **extra) -> dict:
+        """Valori di una candidatura; senza annuncio (bozza con il solo CV) il CV salvato è quello di partenza."""
+        cv = match.tailored_cv if match else base_cv
+        return self._params(
+            company=(match.company_name.strip() if match else ""), title=(match.job_title.strip() if match else ""),
+            cv=Jsonb(cv.model_dump(mode="json")), letter=match.cover_letter if match else "",
+            li=_linkedin_json(linkedin), score=match.match_score if match else None,
+            base=Jsonb(base_cv.model_dump(mode="json")), job=job_text,
+            match=Jsonb(match.model_dump(mode="json")) if match else None, paid=paid, **extra,
+        )
+
+    def save(self, base_cv: ResumeData, match: JobMatchResult | None, job_text: str | None,
+             linkedin: dict[str, LinkedInContent] | None, paid: bool) -> int:
         with self._transaction() as conn:
             return conn.execute(
                 "INSERT INTO saved_applications (user_id, company_name, job_title, cv_json, cover_letter, "
-                "linkedin_json, match_score, base_cv_json, job_text, match_json) "
+                "linkedin_json, match_score, base_cv_json, job_text, match_json, paid) "
                 "VALUES (%(uid)s, %(company)s, %(title)s, %(cv)s, %(letter)s, %(li)s, %(score)s, %(base)s, "
-                "%(job)s, %(match)s) RETURNING id",
-                self._params(
-                    company=company_name.strip(), title=job_title.strip(),
-                    cv=Jsonb(match.tailored_cv.model_dump(mode="json")), letter=match.cover_letter,
-                    li=_linkedin_json(linkedin), score=match.match_score,
-                    base=Jsonb(base_cv.model_dump(mode="json")), job=job_text,
-                    match=Jsonb(match.model_dump(mode="json")),
-                ),
+                "%(job)s, %(match)s, %(paid)s) RETURNING id",
+                self._values(base_cv, match, job_text, linkedin, paid),
             ).fetchone()["id"]
 
-    def update_documents(self, application_id: int, match: JobMatchResult, base_cv: ResumeData) -> bool:
+    def update(self, application_id: int, base_cv: ResumeData, match: JobMatchResult | None, job_text: str | None,
+               linkedin: dict[str, LinkedInContent] | None, paid: bool) -> bool:
+        """Aggiorna la candidatura; azienda e ruolo restano quelli già salvati se l'annuncio non li indica."""
         with self._transaction() as conn:
             return bool(conn.execute(
-                "UPDATE saved_applications SET cv_json = %(cv)s, cover_letter = %(letter)s, match_score = %(score)s, "
-                "match_json = %(match)s, base_cv_json = %(base)s WHERE id = %(id)s AND user_id = %(uid)s",
-                self._params(
-                    id=application_id, cv=Jsonb(match.tailored_cv.model_dump(mode="json")),
-                    letter=match.cover_letter, score=match.match_score,
-                    match=Jsonb(match.model_dump(mode="json")), base=Jsonb(base_cv.model_dump(mode="json")),
-                ),
-            ).rowcount)
-
-    def update_linkedin(self, application_id: int, linkedin: dict[str, LinkedInContent] | None) -> bool:
-        with self._transaction() as conn:
-            return bool(conn.execute(
-                "UPDATE saved_applications SET linkedin_json = %(li)s WHERE id = %(id)s AND user_id = %(uid)s",
-                self._params(id=application_id, li=_linkedin_json(linkedin)),
+                "UPDATE saved_applications SET company_name = COALESCE(NULLIF(%(company)s, ''), company_name), "
+                "job_title = COALESCE(NULLIF(%(title)s, ''), job_title), cv_json = %(cv)s, "
+                "cover_letter = %(letter)s, linkedin_json = %(li)s, match_score = %(score)s, "
+                "base_cv_json = %(base)s, job_text = %(job)s, match_json = %(match)s, paid = paid OR %(paid)s "
+                "WHERE id = %(id)s AND user_id = %(uid)s",
+                self._values(base_cv, match, job_text, linkedin, paid, id=application_id),
             ).rowcount)
 
     def delete(self, application_id: int) -> bool:

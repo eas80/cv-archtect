@@ -5,6 +5,7 @@ import html
 import io
 import re
 import time
+import zipfile
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
@@ -163,7 +164,8 @@ STEPPER_CSS = """
 # --- Stato ------------------------------------------------------------------------
 # Stato legato all'annuncio: va azzerato insieme al risultato del passo 2.
 # saved_app_id: candidatura dell'archivio che corrisponde all'annuncio attuale.
-JOB_KEYS = ("match", "match_prev", "job_text", "saved_app_id")
+# reopened: (titolo, nuova versione?) della candidatura riaperta dall'archivio.
+JOB_KEYS = ("match", "match_prev", "job_text", "saved_app_id", "reopened")
 
 
 # Sezioni dell'app, scelte dal menu ☰.
@@ -178,6 +180,13 @@ def init_state() -> None:
     st.session_state.setdefault("view", GUIDED_VIEW)
     st.session_state.setdefault("session_paid", False)
     st.session_state.setdefault("session_ai_calls", 0)
+    st.session_state.setdefault("session_done", [])
+    # La candidatura in corso è una nuova versione di una già pagata (il titolo nell'archivio lo dice).
+    st.session_state.setdefault("new_version", False)
+    # Salvataggio automatico (autosave_application): autosave_cv permette di salvare una bozza con il solo
+    # CV appena caricato; autosave_off lo sospende dopo che la candidatura in corso è stata eliminata.
+    st.session_state.setdefault("autosave_cv", False)
+    st.session_state.setdefault("autosave_off", False)
 
 
 def start_session(ai_calls: int = 0) -> None:
@@ -188,6 +197,7 @@ def start_session(ai_calls: int = 0) -> None:
     """
     st.session_state.session_paid = False
     st.session_state.session_ai_calls = ai_calls
+    st.session_state.session_done = []
 
 
 def reset_session() -> None:
@@ -196,6 +206,9 @@ def reset_session() -> None:
     st.session_state.step = 1
     st.session_state.job_skipped = False
     st.session_state.view = GUIDED_VIEW
+    st.session_state.autosave_cv = False
+    st.session_state.autosave_off = False
+    st.session_state.new_version = False
     start_session()
     request_scroll_top()
 
@@ -209,6 +222,10 @@ def new_application() -> None:
         st.session_state[key] = None
     st.session_state.job_skipped = False
     st.session_state.view = GUIDED_VIEW
+    # Lo stesso CV è già nell'archivio: la nuova candidatura si salva quando c'è l'annuncio.
+    st.session_state.autosave_cv = False
+    st.session_state.autosave_off = False
+    st.session_state.new_version = False
     start_session()
     go_to(2)
 
@@ -396,14 +413,17 @@ def render_welcome_page() -> None:
     st.markdown("## Il tuo CV su misura per ogni annuncio")
     st.markdown("Carica il curriculum una volta: l'AI lo adatta a ogni offerta di lavoro, lo rende leggibile "
                 "dai sistemi di selezione (ATS), scrive la lettera di presentazione e prepara il tuo profilo "
-                f"LinkedIn. Senza abbonamento, da {seo.price_from()} a candidatura.")
+                f"LinkedIn. Ti candidi all'estero? Traduce CV e lettera in inglese. Senza abbonamento, "
+                f"da {seo.price_from()} a candidatura.")
     with st.container(horizontal=True, gap="medium"):
         for icon, title, text in (("📄", "1. Carica il CV", "PDF o testo, lo riordiniamo noi"),
-                                  ("🎯", "2. Scegli l'annuncio", "CV adattato e lettera pronta"),
-                                  ("💼", "3. LinkedIn", "titolo, Informazioni e post")):
+                                  ("🎯", "2. Scegli l'annuncio", "compatibilità in %, CV adattato e lettera"),
+                                  ("💼", "3. LinkedIn", "titolo, Informazioni e post"),
+                                  ("🌍", "Anche in inglese", "CV e lettera tradotti con l'AI")):
             with st.container(border=True):
                 st.markdown(f"**{icon} {title}**")
                 st.caption(text)
+    st.button("👀 Guarda come funziona, con esempi", type="tertiary", key="welcome_guide", on_click=open_guide_page)
     with st.container(border=True):
         render_auth_forms()
     st.markdown("#### Domande frequenti")
@@ -435,6 +455,9 @@ def render_auth_forms() -> None:
             st.caption(f"Ogni nuovo account riceve {config.INITIAL_CREDITS} crediti.")
         elif free_mode_enabled():
             st.caption("La registrazione è gratuita: puoi sistemare il CV a mano e acquistare crediti per l'AI.")
+        else:
+            st.caption(f"Registrazione gratuita. Per usare l'AI acquisti crediti: da {seo.price_from()} a "
+                       "candidatura, senza abbonamento.")
         first_col, last_col = st.columns(2)
         first_name = first_col.text_input("Nome", key="register_first_name",
                                           max_chars=auth_service.MAX_NAME_LENGTH, autocomplete="given-name")
@@ -504,9 +527,10 @@ def render_password_reset() -> None:
 
 
 AI_BENEFITS = (
+    "**Scopri quanto sei compatibile con l'annuncio** (es. 68%) e quali parole chiave ti mancano",
     "**Legge e riordina il tuo CV in un minuto**, invece di compilarlo campo per campo",
-    "**Lo adatta all'annuncio** che ti interessa e ti dice quanto sei compatibile",
-    "**Scrive la lettera di presentazione** su misura per l'annuncio",
+    "**Adatta il CV all'annuncio e scrive la lettera di presentazione** su misura",
+    "**Traduce CV e lettera in inglese**, per candidarti anche all'estero",
     "**Prepara il profilo LinkedIn**: titolo, sezione Informazioni e post",
 )
 
@@ -547,8 +571,9 @@ def charge_session() -> bool:
         return False
     state.session_paid = True
     if not user.is_admin:
-        state.pending_toast = ("Usato 1 credito per questa candidatura: modifiche, traduzioni e LinkedIn "
-                               "sono inclusi fino alla prossima «Nuova candidatura».")
+        state.pending_toast = ("Usato 1 credito per questa candidatura. Download, correzioni a mano e i testi "
+                               "LinkedIn (se non li hai ancora generati) restano inclusi; ogni altra elaborazione "
+                               "con l'AI userà un nuovo credito.")
     return True
 
 
@@ -558,8 +583,9 @@ def render_session_note() -> None:
     if user is None or user.is_admin:
         return
     if st.session_state.session_paid:
-        st.caption("✅ **Candidatura pagata**: modifiche, traduzioni, download e testi LinkedIn sono inclusi "
-                   "fino alla prossima «Nuova candidatura».")
+        st.caption("✅ **Candidatura pagata**: download e correzioni a mano sono inclusi, e così i testi LinkedIn "
+                   "se non li hai ancora generati. Ogni altra elaborazione con l'AI (modifiche, traduzioni, nuovi "
+                   "testi) crea una nuova versione e usa 1 credito.")
     else:
         st.caption("🪙 **1 credito = 1 candidatura completa** (CV, annuncio e LinkedIn). Si scala solo quando "
                    "scarichi o salvi un documento, o generi i testi LinkedIn.")
@@ -589,11 +615,15 @@ def render_buy_credits(user: auth_service.User, key: str = "buy") -> None:
     # Il listino può cambiare (pannello admin): una scelta che non esiste più si dimentica.
     if st.session_state.get(f"{key}_pack") not in packs:
         st.session_state.pop(f"{key}_pack", None)
+    # Preselezionato il pacchetto centrale del listino (con 1, 3 e 10: quello da 3), senza spingere
+    # verso il più caro; il più conveniente a candidatura è segnalato, senza inventare «il più scelto».
+    best = min(packs, key=lambda k: packs[k].unit_cents)
     pack_id = st.radio(
         "Pacchetto", list(packs), key=f"{key}_pack", label_visibility="collapsed",
-        index=len(packs) - 1,
+        index=len(packs) // 2,
         format_func=lambda k: f"{packs[k].label} — {packs[k].price_label}"
-        + (f" ({euro(packs[k].unit_cents)} a candidatura)" if packs[k].credits > 1 else ""),
+        + (f" ({euro(packs[k].unit_cents)} a candidatura)" if packs[k].credits > 1 else "")
+        + (" · prezzo migliore a candidatura" if k == best and len(packs) > 1 else ""),
     )
     # Contenuto digitale: per la normativa UE il recesso di 14 giorni si perde solo con il consenso
     # espresso dell'utente prima del pagamento.
@@ -666,9 +696,10 @@ def buy_dialog() -> None:
         if free_mode_enabled():
             st.info("**Piano gratuito.** Puoi compilare e sistemare il CV a mano, scegliere lo stile e "
                     "scaricare il PDF. Le funzioni AI richiedono crediti.")
-        st.markdown("\n".join(f"- {b}" for b in AI_BENEFITS))
-        st.caption("1 credito = 1 candidatura completa: lettura del CV, adattamento all'annuncio con lettera, "
-                   "modifiche e testi LinkedIn. Si scala solo quando scarichi o salvi i documenti. " + price_hook())
+        render_free_vs_credits()
+        st.markdown("**Nessun abbonamento.** 1 credito = 1 candidatura completa: si scala solo quando scarichi o "
+                    f"salvi i documenti. {price_hook()}")
+        st.markdown(f"👀 {guide_link('Guarda come funziona, con esempi')} →")
     render_buy_credits(user, key="dialog")
 
 
@@ -683,8 +714,12 @@ def render_upsell(title: str, key: str, free_hint: str | None = None) -> None:
         st.markdown(f"#### ✨ {title}")
         st.markdown("\n".join(f"- {b}" for b in AI_BENEFITS))
         if payment_service.payments_enabled():
-            st.caption(price_hook())
-            if st.button("Acquista crediti", type="primary", use_container_width=True, key=f"{key}_upsell"):
+            st.markdown(f"**1 credito = 1 candidatura completa** · da {seo.price_from()} a candidatura · nessun abbonamento · "
+                        f"crediti validi {config.CREDITS_VALIDITY_MONTHS} mesi")
+            st.caption(price_hook() + " Il credito si scala solo quando scarichi o salvi i documenti.")
+            st.markdown(f"👀 {guide_link('Guarda come funziona, con esempi')} →")
+            if st.button("✨ Sblocca la mia candidatura", type="primary", use_container_width=True,
+                         key=f"{key}_upsell"):
                 # Rerun completo: chiude un'eventuale finestra aperta e apre quella dei crediti.
                 open_buy_dialog()
                 st.rerun()
@@ -765,6 +800,7 @@ def render_menu(user: auth_service.User) -> None:
             view = st.session_state.view
             menu_html('<div class="cv-menu-label">Candidature</div>')
             menu_item("Percorso guidato", "route", "guided", show_view, GUIDED_VIEW, current=view == GUIDED_VIEW)
+            menu_item("Come funziona", "help", "guide", open_guide_page)
             if st.session_state.cv is not None:
                 menu_item("Nuova candidatura", "add_circle", "new_app", new_application)
             if user.has_applications_archive:
@@ -906,6 +942,120 @@ def open_legal_page(doc: str) -> None:
     request_scroll_top()
 
 
+# --- Come funziona -----------------------------------------------------------------------
+# Pagina con gli screenshot del percorso completo (?doc=come-funziona): mostra a chi non ha crediti
+# cosa ottiene con una candidatura. Si apre anche senza accesso.
+GUIDE_DOC = "come-funziona"
+SCREENSHOTS_DIR = "docs/screenshots"
+
+# (titolo, testo, [(screenshot, didascalia)]) per ogni passo del percorso.
+GUIDE_STEPS = (
+    ("Passo 1 · Carichi il tuo CV, l'AI lo legge e lo riordina",
+     "Carichi il CV che hai già, in PDF o come testo. In meno di un minuto l'AI lo legge e lo riordina in un "
+     "formato pulito, leggibile dai sistemi di selezione automatica (ATS). Controlli cosa ha letto e "
+     "correggi quello che vuoi.",
+     [("01_carica_cv.png", "Carichi il PDF o incolli il testo del CV."),
+      ("02_cv_letto.png", "Il CV letto e riordinato: esperienze, risultati e competenze al loro posto."),
+      ("03_cv_editor.png", "Vuoi correggere o aggiungere qualcosa? Modifichi ogni campo.")]),
+    ("Passo 2 · Scegli l'annuncio: compatibilità, CV adattato e lettera",
+     "Incolli il link o il testo dell'annuncio. L'AI confronta il tuo CV con l'offerta e ti dice **quanto sei "
+     "compatibile**, quali parole chiave dell'annuncio hai già e quali mancano. Poi riscrive il CV mettendo in "
+     "evidenza ciò che l'azienda cerca e scrive una lettera di presentazione su misura. Ti candidi all'estero? "
+     "Con un clic CV e lettera vengono tradotti in inglese.",
+     [("04_offerta.png", "Indichi l'annuncio con il link o incollandone il testo."),
+      ("05_risultato.png", "La percentuale di compatibilità con l'annuncio e le parole chiave presenti e mancanti."),
+      ("06_lettera.png", "La lettera di presentazione scritta per quell'annuncio, con i tuoi risultati concreti."),
+      ("07_modifica_ai.png", "Vuoi cambiare qualcosa? Lo scrivi a parole e l'AI corregge CV e lettera."),
+      ("08_modifica_applicata.png", "Le modifiche applicate, con il riepilogo di cosa è cambiato."),
+      ("09_download.png", "Scegli la lingua (italiano o inglese, con la traduzione dell'AI) e lo stile guardando "
+                          "l'anteprima, poi scarichi CV e lettera in PDF.")]),
+    ("Passo 3 · Il profilo LinkedIn",
+     "Dal tuo CV l'AI scrive il titolo del profilo (headline), la sezione «Informazioni» e un post per far "
+     "sapere che sei disponibile, nel tono che preferisci. Li copi e li incolli su LinkedIn. Alla fine trovi "
+     "tutti i documenti della candidatura insieme, da scaricare anche in un unico file ZIP.",
+     [("10_linkedin_toni.png", "Scegli una o più versioni: risultati, diplomatico, narrativo, essenziale."),
+      ("11_linkedin_testi.png", "Titolo, sezione Informazioni e post pronti da copiare.")]),
+)
+
+
+def open_guide_page() -> None:
+    st.query_params["doc"] = GUIDE_DOC
+    request_scroll_top()
+
+
+def guide_link(text: str = "Guarda come funziona") -> str:
+    """Link in Markdown alla pagina «Come funziona»: si apre in una nuova scheda, senza perdere il lavoro."""
+    return f"[{text}]({current_base_url()}/?doc={GUIDE_DOC})"
+
+
+CREDIT_INCLUDES = (
+    "Lettura e riordino del CV con l'AI",
+    "Percentuale di compatibilità con l'annuncio e parole chiave mancanti",
+    "CV adattato all'annuncio",
+    "Lettera di presentazione su misura",
+    "Traduzione di CV e lettera in inglese",
+    "Modifiche a parole con l'AI",
+    "Titolo, Informazioni e post per LinkedIn",
+    "Tutti i documenti in PDF, in 7 stili",
+)
+
+
+def render_free_vs_credits() -> None:
+    """Cosa include un credito; con la modalità gratuita attiva, confronto con ciò che si fa gratis."""
+    if not free_mode_enabled():
+        st.markdown("\n".join(f"- ✅ {item}" for item in CREDIT_INCLUDES))
+        return
+    rows = [("Compilare il CV a mano e scaricarlo in PDF", "✅", "✅")]
+    rows += [(item, "—", "✅") for item in CREDIT_INCLUDES[:-1]]
+    st.table(pd.DataFrame(rows, columns=["", "Gratis", "Con 1 credito"]).set_index(""))
+
+
+def close_guide_and_buy() -> None:
+    close_legal_page()
+    open_buy_dialog()
+
+
+def render_guide_cta(key: str) -> None:
+    """Invito finale: acquisto per chi ha fatto l'accesso, registrazione per gli altri."""
+    user = current_user()
+    with st.container(border=True):
+        st.markdown("#### Pronto per la tua prossima candidatura?")
+        st.markdown(f"Nessun abbonamento: {price_hook()} Il credito si scala solo quando scarichi o salvi i "
+                    "documenti: fino ad allora puoi provare, correggere e rigenerare quanto vuoi.")
+        if user is None:
+            st.button("Crea il tuo account", type="primary", use_container_width=True, key=f"{key}_signup",
+                      on_click=close_legal_page)
+        elif user.is_admin or user.credits:
+            st.button("Torna al percorso guidato", type="primary", use_container_width=True, key=f"{key}_back",
+                      on_click=close_legal_page)
+        elif payment_service.payments_enabled():
+            st.button("✨ Acquista crediti", type="primary", use_container_width=True, key=f"{key}_buy",
+                      on_click=close_guide_and_buy)
+
+
+def render_guide_page() -> None:
+    st.set_page_config(page_title=seo.DOC_PAGES[GUIDE_DOC][0])
+    st.button("← Torna all'app", type="tertiary", key="guide_back", on_click=close_legal_page)
+    st.markdown("## Come funziona CV Architect")
+    st.markdown("Ecco cosa ottieni con **1 credito = 1 candidatura completa**: dal CV caricato ai documenti "
+                "pronti da inviare, fino al profilo LinkedIn. Gli esempi sono di una candidata di fantasia.")
+    st.markdown("#### Gratis o con i crediti?" if free_mode_enabled() else "#### Cosa include 1 credito")
+    render_free_vs_credits()
+    render_guide_cta("guide_top")
+    for title, text, shots in GUIDE_STEPS:
+        st.markdown(f"### {title}")
+        st.markdown(text)
+        for file, caption in shots:
+            with st.container(border=True):
+                st.image(f"{SCREENSHOTS_DIR}/{file}", caption=caption, width="stretch")
+    render_guide_cta("guide_bottom")
+    st.markdown("#### Domande frequenti")
+    for question, answer in seo.faq():
+        with st.expander(question):
+            st.markdown(answer)
+    st.caption(legal_links())
+
+
 @st.dialog("Elimina il mio account")
 def delete_account_dialog() -> None:
     user = current_user()
@@ -967,6 +1117,37 @@ def ai_button(label: str, busy_label: str, key: str, disabled: bool = False) -> 
     return busy
 
 
+# Un credito copre un giro di generazioni: lettura del CV, adattamento all'annuncio e testi LinkedIn, una volta
+# ciascuno, con le modifiche fatte prima della consegna. Dopo la consegna (credito scalato) ogni altro uso
+# dell'AI apre una nuova versione della candidatura, che userà un altro credito.
+ROUND_ACTIONS = ("Lettura CV", "Adattamento all'annuncio", "Testi LinkedIn")
+
+
+def starts_new_round(action: str) -> bool:
+    state = st.session_state
+    return bool(state.session_paid and (action not in ROUND_ACTIONS or action in state.session_done))
+
+
+def ai_blocked(action: str) -> bool:
+    """True se per `action` serve un credito che l'utente non ha."""
+    return needs_credits() or (starts_new_round(action) and needs_credits(new_session=True))
+
+
+def render_new_round_hint(action: str) -> None:
+    if starts_new_round(action):
+        when = "subito" if action == "Testi LinkedIn" else "quando scarichi o salvi i documenti"
+        st.caption(f"🪙 Questa candidatura è già pagata: questa elaborazione con l'AI crea una nuova versione e "
+                   f"userà 1 credito {when}.")
+
+
+def begin_new_version() -> None:
+    """Nuovo giro dopo una consegna: nuova candidatura da pagare; nell'archivio quella pagata resta com'è."""
+    start_session()
+    st.session_state.saved_app_id = None
+    st.session_state.new_version = True
+    st.session_state.reopened = None
+
+
 def run_claude(api_key: str | None, action: str, spinner_text: str, call):
     """Esegue `call(service)` in un riquadro «in corso» ben visibile. None se fallisce.
 
@@ -980,6 +1161,11 @@ def run_claude(api_key: str | None, action: str, spinner_text: str, call):
         return None
     if needs_credits():
         st.error("Serve 1 credito per questa candidatura: acquistalo dal pulsante «✨ Acquista crediti» in alto.")
+        return None
+    new_round = starts_new_round(action)
+    if new_round and needs_credits(new_session=True):
+        st.error("Questa candidatura è già pagata: per un'altra elaborazione con l'AI serve 1 credito. "
+                 "Acquistalo dal pulsante «✨ Acquista crediti» in alto.")
         return None
     if not user.is_admin:
         if st.session_state.session_ai_calls >= config.SESSION_AI_CALLS_LIMIT:
@@ -1001,12 +1187,17 @@ def run_claude(api_key: str | None, action: str, spinner_text: str, call):
             st.error(str(exc))
             return None
         status.update(label="✅ Fatto!", state="complete", expanded=False)
+    if new_round:
+        begin_new_version()
+    st.session_state.session_done.append(action)
     st.session_state.session_ai_calls += 1
     auth_service.log_usage(user.id, action)
     return result
 
 
 def render_stepper(current: int) -> None:
+    # Senza crediti (e senza CV) i passi 2 e 3 hanno il lucchetto: si sbloccano con un credito.
+    locked = st.session_state.cv is None and needs_credits(new_session=True)
     parts = []
     for i, title in enumerate(STEP_TITLES, start=1):
         if i == current:
@@ -1015,6 +1206,8 @@ def render_stepper(current: int) -> None:
             state, dot = "done", "✓"
         elif i == 2 and st.session_state.job_skipped:
             state, dot = "skipped", "–"
+        elif locked and i > 1:
+            state, dot = "", "🔒"
         else:
             state, dot = "", str(i)
         parts.append(f'<div class="cv-step {state}"><div class="cv-dot">{dot}</div>'
@@ -1139,7 +1332,8 @@ def documents_in_language(cv: ResumeData, cover_letter: str | None, key: str,
         st.markdown(f"**Il testo è in {LANGUAGE_NAMES[source]}.** Per avere {what} in {LANGUAGE_NAMES[language]} "
                     "li traduciamo con l'AI; nel frattempo l'anteprima mostra i titoli nella nuova lingua "
                     "e il testo originale.")
-        if needs_credits():
+        render_new_round_hint("Traduzione")
+        if ai_blocked("Traduzione"):
             st.caption("La traduzione richiede crediti.")
             st.button("✨ Acquista crediti", key=f"{key}_translate_buy", on_click=open_buy_dialog)
         elif ai_button(f"🌍 Traduci {what} in {LANGUAGE_NAMES[language]}", "⏳ Traduzione in corso...",
@@ -1258,6 +1452,9 @@ def set_new_cv(cv: ResumeData, source_text: str | None = None, from_ai: bool = F
         st.session_state[k] = None
     st.session_state.linkedin = None
     st.session_state.job_skipped = False
+    st.session_state.autosave_cv = True
+    st.session_state.autosave_off = False
+    st.session_state.new_version = False
     bump("base")
     request_scroll_top()
 
@@ -1359,6 +1556,20 @@ def render_cv_input(api_key: str | None, key: str) -> None:
         st.rerun()
 
 
+def render_steps_preview() -> None:
+    """Le 3 fasi con uno screenshot d'esempio: cosa si ottiene con un credito, anche prima di comprarlo."""
+    st.markdown("#### Cosa ottieni con 1 credito")
+    for col, (file, caption) in zip(st.columns(3), (
+            ("02_cv_letto.png", "① CV letto e riordinato, leggibile dagli ATS"),
+            ("05_risultato.png", "② Compatibilità con l'annuncio (es. 68%), parole chiave mancanti, CV adattato "
+                                 "e lettera"),
+            ("11_linkedin_testi.png", "③ Titolo, Informazioni e post LinkedIn in più toni"))):
+        with col:
+            st.image(f"{SCREENSHOTS_DIR}/{file}", width="stretch")
+            st.caption(caption)
+    st.markdown(f"👀 {guide_link('Guarda tutto il percorso, passo per passo')} →")
+
+
 def render_step_cv(api_key: str | None) -> None:
     cv: ResumeData | None = st.session_state.cv
     if cv is None:
@@ -1368,8 +1579,14 @@ def render_step_cv(api_key: str | None) -> None:
             "di selezione automatica dei candidati (ATS).",
         )
         render_cv_input(api_key, key="cv_input")
-        action_bar("Carica il tuo CV per iniziare", forward=("Avanti: offerta di lavoro", go_to, 2),
-                   disabled_reason="Carica il CV per andare avanti")
+        if needs_credits(new_session=True):
+            render_steps_preview()
+        if needs_credits(new_session=True) and not free_mode_enabled():
+            action_bar("Ti serve 1 credito per iniziare: copre CV, annuncio e LinkedIn",
+                       forward=("✨ Acquista crediti", open_buy_dialog))
+        else:
+            action_bar("Carica il tuo CV per iniziare", forward=("Avanti: offerta di lavoro", go_to, 2),
+                       disabled_reason="Carica il CV per andare avanti")
         return
 
     source_text = st.session_state.get("cv_source_text")
@@ -1404,6 +1621,7 @@ def render_step_cv(api_key: str | None) -> None:
             )
         if st.button("🔄 Usa un altro CV", type="tertiary", key="cv_replace"):
             replace_cv_dialog(api_key)
+    render_autosave_note()
 
     action_bar("Tutto giusto? Ora scegli l'annuncio di lavoro",
                forward=("Avanti: offerta di lavoro", go_to, 2))
@@ -1476,6 +1694,11 @@ def render_job_input(api_key: str | None, cv: ResumeData, key: str) -> None:
     if match is not None:
         if replacing and st.session_state.session_paid:
             start_session(ai_calls=1)
+        if replacing:
+            st.session_state.saved_app_id = None
+        st.session_state.reopened = None
+        st.session_state.autosave_off = False
+        st.session_state.new_version = False
         st.session_state.match = match
         st.session_state.match_prev = None
         st.session_state.job_text = job_text
@@ -1533,6 +1756,7 @@ def render_ai_revision(api_key: str | None, cv: ResumeData, match: JobMatchResul
         "«Non ho lavorato nel settore farmaceutico ma in quello chimico: non dire che ho esperienza diretta "
         "nel farmaceutico, evidenzia ciò che è simile» oppure «La lettera è troppo formale, rendila più diretta»."
     )
+    render_new_round_hint("Modifica con l'AI")
     rev = st.session_state.get("revise_rev", 0)
     instructions = st.text_area(
         "Cosa vuoi cambiare?", height=130, key=f"revise_{rev}_text",
@@ -1590,11 +1814,15 @@ def render_step_job(api_key: str | None) -> None:
         2, "Il CV adattato e la lettera",
         "Ecco i documenti per questa candidatura: controllali, correggili se serve e scaricali.",
     )
-    reopened = (st.session_state.get("saved_app_id") is not None
-                and st.session_state.get("reopened_app_id") == st.session_state.get("saved_app_id"))
-    if reopened:
-        st.info("**Candidatura riaperta dall'archivio.** Correggi CV e lettera nelle schede qui sotto, oppure "
-                "chiedi all'AI cosa cambiare. Ogni modifica viene salvata nella candidatura.")
+    if reopened := st.session_state.get("reopened"):
+        title, new_version = reopened
+        if new_version and not st.session_state.session_paid:
+            st.info(f"**Nuova versione di «{title}».** Correggi CV e lettera nelle schede qui sotto, oppure chiedi "
+                    "all'AI cosa cambiare. È una nuova candidatura: userà 1 credito quando scarichi o salvi i "
+                    "documenti. L'originale resta invariato in «Le mie candidature».")
+        elif not new_version:
+            st.info(f"**Bozza «{title}» ripresa dall'archivio.** Continua da qui: ogni modifica si salva nella "
+                    "bozza.")
 
     with st.container(border=True):
         st.markdown(f"**Compatibilità con l'annuncio: {match.match_score}%** · {score_comment(match.match_score)}")
@@ -1612,8 +1840,6 @@ def render_step_job(api_key: str | None) -> None:
         render_pdf_downloads(match.tailored_cv, key="tailored", cover_letter=match.cover_letter)
         if not delivery_blocked():
             with st.container(horizontal=True):
-                if archive_enabled():
-                    render_save_application(match)
                 with st.popover("Altri formati"):
                     st.download_button("Lettera (.txt)", data=match.cover_letter, file_name="lettera_presentazione.txt",
                                        on_click=charge_session)
@@ -1655,6 +1881,7 @@ def render_step_job(api_key: str | None) -> None:
 
     if st.button("🔄 Prova con un altro annuncio", type="tertiary", key="job_replace"):
         replace_job_dialog(api_key, cv)
+    render_autosave_note()
 
     action_bar("Scarica i documenti, poi prepara il profilo LinkedIn",
                back=("Il tuo CV", go_to, 1), forward=("Avanti: profilo LinkedIn", go_to, 3))
@@ -1667,7 +1894,8 @@ JOB_TABS = ("✏️ Correggi la lettera", "✏️ Correggi il CV", "🤖 Modific
 def replace_job_dialog(api_key: str | None, cv: ResumeData) -> None:
     st.caption("Il nuovo annuncio sostituisce CV adattato e lettera attuali: scaricali prima se ti servono."
                + (" È una nuova candidatura: userà 1 credito quando scaricherai i documenti."
-                  if st.session_state.session_paid else ""))
+                  if st.session_state.session_paid else "")
+               + (" In «Le mie candidature» si salva come candidatura a parte." if archive_enabled() else ""))
     if needs_credits(new_session=True):
         render_upsell("Adatta il CV all'annuncio e ricevi la lettera", key="job_dialog")
     else:
@@ -1683,6 +1911,7 @@ def render_linkedin_input(api_key: str | None, cv: ResumeData, key: str) -> None
         if st.checkbox(f"**{label}**: {TONE_DESCRIPTIONS[tone]}", value=tone in ("risultati", "diplomatico"),
                        key=f"{key}_{tone}")
     ]
+    render_new_round_hint("Testi LinkedIn")
     clicked = ai_button("Scrivi i testi LinkedIn", "⏳ Sto scrivendo i testi LinkedIn...", key=f"{key}_go",
                         disabled=not tones)
     if not clicked:
@@ -1703,6 +1932,73 @@ def render_linkedin_input(api_key: str | None, cv: ResumeData, key: str) -> None
             bump(f"linkedin_{tone}")
         request_scroll_top()
         st.rerun()
+
+
+def final_documents() -> tuple[ResumeData, str | None, str, str]:
+    """CV (adattato, se c'è l'annuncio) e lettera con lo stile e la lingua scelti per scaricarli.
+
+    Se in quella lingua c'è già la traduzione fatta dall'AI si usa quella; altrimenti i testi originali.
+    """
+    state = st.session_state
+    match: JobMatchResult | None = state.match
+    key = "tailored" if match else "base"
+    cv, letter = (match.tailored_cv, match.cover_letter) if match else (state.cv, None)
+    template = state.get(f"{key}_tpl", "moderno")
+    source = guess_language(cv.professional_summary, *(h for e in cv.experiences for h in e.highlights),
+                            letter or "")
+    language = state.get(f"{key}_language") or source
+    translated = state.get("translations", {}).get(translation_key(cv, letter, language))
+    if translated:
+        cv, letter = ResumeData.model_validate_json(translated[0]), translated[1]
+    elif language != source:
+        language = source  # traduzione non fatta: i titoli restano nella lingua del testo
+    return cv, letter, template, language
+
+
+def linkedin_text(versions: dict[str, LinkedInContent]) -> str:
+    return "\n\n".join(
+        f"=== Versione «{LINKEDIN_TONES[tone][0]}» ===\n\nHEADLINE\n{c.headline}\n\nINFORMAZIONI\n"
+        f"{c.about_section}\n\nPOST\n{c.launch_post}"
+        for tone, c in versions.items()
+    )
+
+
+def render_final_documents(versions: dict[str, LinkedInContent]) -> None:
+    """Fine percorso: tutti i documenti della candidatura in un posto, senza tornare ai passi precedenti."""
+    cv, letter, template, language = final_documents()
+    letter_name = pdf_file_name("Lettera" if language == "it" else "Cover_letter", cv)
+    texts = linkedin_text(versions)
+
+    def zip_all() -> bytes:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(pdf_file_name("CV", cv), render_cv_pdf(cv, template, language))
+            if letter:
+                archive.writestr(letter_name, render_cover_letter_pdf(cv, letter, template, language))
+            archive.writestr("Testi_LinkedIn.txt", texts)
+        return buffer.getvalue()
+
+    with st.container(border=True):
+        st.markdown("#### 📦 La tua candidatura completa")
+        st.caption(f"Stile {TEMPLATES[template].label}, in {LANGUAGE_NAMES[language]}: quelli scelti per "
+                   "scaricare il CV. Per cambiarli torna al passo precedente.")
+        if delivery_blocked():
+            render_delivery_blocked("final")
+            return
+        st.download_button("📦 Scarica tutto (ZIP)", data=zip_all, file_name="Candidatura.zip",
+                           mime="application/zip", type="primary", use_container_width=True,
+                           key="final_zip", on_click=charge_session)
+        with st.container(horizontal=True):
+            st.download_button("📄 CV (PDF)", data=lambda: render_cv_pdf(cv, template, language),
+                               file_name=pdf_file_name("CV", cv), mime="application/pdf", key="final_cv",
+                               on_click=charge_session)
+            if letter:
+                st.download_button("✉️ Lettera (PDF)",
+                                   data=lambda: render_cover_letter_pdf(cv, letter, template, language),
+                                   file_name=letter_name, mime="application/pdf", key="final_letter",
+                                   on_click=charge_session)
+            st.download_button("💼 Testi LinkedIn (.txt)", data=texts, file_name="Testi_LinkedIn.txt",
+                               key="final_linkedin", on_click=charge_session)
 
 
 def render_step_linkedin(api_key: str | None) -> None:
@@ -1735,7 +2031,9 @@ def render_step_linkedin(api_key: str | None) -> None:
                    "il CV e i testi LinkedIn restano.")
         if (saved := current_saved_application()) is not None:
             st.caption(f"💾 Questi testi sono salvati anche nella candidatura «{saved.title}».")
+    render_final_documents(versions)
 
+    st.markdown("#### 💼 I testi per LinkedIn")
     tabs = st.tabs([f"Versione «{LINKEDIN_TONES[t][0]}»" for t in versions])
     for tab, (tone, content) in zip(tabs, versions.items()):
         with tab:
@@ -1777,54 +2075,53 @@ def current_saved_application() -> applications_service.SavedApplication | None:
     return app_store().get(app_id) if app_id and archive_enabled() else None
 
 
+def application_paid() -> bool:
+    """La candidatura in corso è pagata, o fatta tutta a mano (gratis): dall'archivio si può scaricare."""
+    return bool(st.session_state.session_paid or not st.session_state.session_ai_calls)
+
+
 def saved_fingerprint() -> tuple:
-    match: JobMatchResult = st.session_state.match
-    linkedin = st.session_state.linkedin or {}
-    return (match.model_dump_json(), st.session_state.cv.model_dump_json(),
-            tuple((tone, c.model_dump_json()) for tone, c in linkedin.items()))
+    state = st.session_state
+    return (state.cv.model_dump_json(), state.match.model_dump_json() if state.match else None,
+            tuple((tone, c.model_dump_json()) for tone, c in (state.linkedin or {}).items()),
+            state.job_text, application_paid())
 
 
-def sync_saved_application() -> None:
-    """Riporta nella candidatura salvata le modifiche fatte dopo il salvataggio (CV, lettera, LinkedIn)."""
-    app_id = st.session_state.get("saved_app_id")
-    if not app_id or st.session_state.match is None or not archive_enabled():
+def autosave_application() -> None:
+    """Salvataggio automatico in «Le mie candidature»: il CV, poi CV adattato e lettera, infine LinkedIn.
+
+    Si aggiorna una sola candidatura per annuncio: un altro CV o un altro annuncio ne iniziano una nuova
+    (saved_app_id azzerato). Le bozze non pagate si riaprono ma non si scaricano dall'archivio.
+    """
+    state = st.session_state
+    if state.cv is None or state.autosave_off or not archive_enabled():
+        return
+    if state.saved_app_id is None and state.match is None and not (state.autosave_cv and state.cv.full_name.strip()):
         return
     fingerprint = saved_fingerprint()
-    if fingerprint == st.session_state.get("saved_app_fingerprint"):
+    # Nessuna modifica: niente da salvare (vale anche per una nuova versione appena riaperta, non ancora cambiata).
+    if fingerprint == state.get("saved_app_fingerprint"):
         return
-    match: JobMatchResult = st.session_state.match
     store = app_store()
-    if store.update_documents(app_id, match, st.session_state.cv):
-        store.update_linkedin(app_id, st.session_state.linkedin)
-        st.session_state.saved_app_fingerprint = fingerprint
-    else:
-        # Eliminata dall'archivio nel frattempo.
-        st.session_state.saved_app_id = None
-
-
-def render_save_application(match: JobMatchResult) -> None:
-    if (saved := current_saved_application()) is not None:
-        st.caption(f"💾 Salvata in «Le mie candidature» come **{saved.title}**: le modifiche e i testi LinkedIn "
-                   "si aggiungono da soli.")
+    match = state.match
+    if state.new_version and match is not None:
+        job_title = match.job_title.removesuffix(NEW_VERSION_SUFFIX)
+        match = match.model_copy(update={"job_title": job_title + NEW_VERSION_SUFFIX})
+    values = (state.cv, match, state.job_text, state.linkedin, application_paid())
+    if state.saved_app_id is None:
+        state.saved_app_id = store.save(*values)
+    elif not store.update(state.saved_app_id, *values):
+        # Eliminata dall'archivio (es. da un'altra scheda): non la si ricrea.
+        state.saved_app_id = None
+        state.autosave_off = True
         return
-    with st.popover("💾 Salva nelle candidature"):
-        st.caption("Ritroverai CV, lettera e testi LinkedIn in «📁 Le mie candidature», senza usare di nuovo l'AI.")
-        with st.form("save_application_form", border=False):
-            company = st.text_input("Azienda", placeholder="es. Generali")
-            role = st.text_input("Ruolo", placeholder="es. QA Specialist")
-            if st.form_submit_button("Salva", use_container_width=True):
-                if not (company.strip() and role.strip()):
-                    st.warning("Indica sia l'azienda sia il ruolo.")
-                    return
-                if not charge_session():
-                    st.error("Per salvare la candidatura serve 1 credito.")
-                    return
-                st.session_state.saved_app_id = app_store().save(
-                    company, role, match, st.session_state.cv, st.session_state.job_text, st.session_state.linkedin,
-                )
-                st.session_state.saved_app_fingerprint = saved_fingerprint()
-                st.session_state.pending_toast = f"Candidatura «{company.strip()} - {role.strip()}» salvata."
-                st.rerun()
+    state.saved_app_fingerprint = fingerprint
+
+
+def render_autosave_note() -> None:
+    if archive_enabled() and st.session_state.get("saved_app_id"):
+        st.caption("💾 Salvata in automatico in «📁 Le mie candidature» (menu ☰): puoi interrompere e riprendere "
+                   "da lì quando vuoi.")
 
 
 def format_date(timestamp: str) -> str:
@@ -1836,43 +2133,90 @@ def delete_application(app_id: int) -> None:
     if app_store().delete(app_id):
         if st.session_state.get("saved_app_id") == app_id:
             st.session_state.saved_app_id = None
+            st.session_state.autosave_off = True
         st.session_state.pending_toast = "Candidatura eliminata."
 
 
 def reopen_application(app_id: int) -> None:
-    """Riporta la candidatura nel percorso guidato (passo 2), collegata all'archivio."""
+    """Riporta la candidatura nel percorso guidato (passo 2).
+
+    Una bozza non pagata si riprende così com'è e si continua a salvare lì. Una candidatura pagata resta
+    invariata nell'archivio: riaprirla crea una nuova versione, che è una nuova candidatura (1 credito alla
+    consegna) e si salva a parte appena la si modifica.
+    """
     if (app := app_store().get(app_id)) is None:
         return
     reset_session()
+    new_version = app.paid
+    st.session_state.autosave_cv = app.match is None
     st.session_state.cv = app.base_cv or app.cv
     st.session_state.match = app.match
+    if app.match is not None:
+        # Titolo come nell'archivio (le candidature meno recenti non hanno azienda e ruolo nel risultato).
+        st.session_state.match = app.match.model_copy(update={
+            "company_name": app.match.company_name or app.company_name,
+            "job_title": app.match.job_title or app.job_title})
+    st.session_state.new_version = new_version and app.match is not None
     # Le candidature salvate prima di questa funzione non hanno il testo dell'annuncio.
-    st.session_state.job_text = app.job_text or f"Candidatura per il ruolo {app.job_title} presso {app.company_name}."
+    if app.match is not None:
+        st.session_state.job_text = (app.job_text or
+                                     f"Candidatura per il ruolo {app.job_title} presso {app.company_name}.")
     st.session_state.linkedin = app.linkedin or None
-    st.session_state.saved_app_id = app.id
+    st.session_state.saved_app_id = None if new_version else app.id
+    # Una generazione, un credito: la nuova versione di una candidatura con annuncio si paga alla consegna
+    # anche se la si corregge solo a mano. La bozza ha già usato l'AI: si paga alla prima consegna.
+    st.session_state.session_paid = False
+    st.session_state.session_ai_calls = 0 if new_version and app.match is None else 1
     st.session_state.saved_app_fingerprint = saved_fingerprint()
-    # Una candidatura salvata è già stata pagata: riaprirla e modificarla non costa altri crediti.
-    st.session_state.session_paid = True
+    st.session_state.reopened = (app.title, new_version)
     st.session_state.step = 2
     st.session_state.view = GUIDED_VIEW
     st.session_state.job_tab = JOB_TABS[2]
     request_scroll_top()
     for key in ("base", "tailored", "letter", "revise", *(f"linkedin_{tone}" for tone in app.linkedin)):
         bump(key)
-    st.session_state.pending_toast = f"Candidatura «{app.title}» riaperta."
-    st.session_state.reopened_app_id = app.id
+    st.session_state.pending_toast = (f"Nuova versione di «{app.title}»." if new_version
+                                      else f"Bozza «{app.title}» ripresa.")
+
+
+NEW_VERSION_SUFFIX = " (nuova versione)"
 
 
 def render_saved_application(app: applications_service.SavedApplication) -> None:
+    if app.paid:
+        st.markdown("**✅ Completata.** I documenti restano così come li hai generati: scaricali quando vuoi, "
+                    "senza usare crediti.")
+        render_pdf_downloads(app.cv, key=f"saved_{app.id}", cover_letter=app.cover_letter or None, preview=False,
+                             charge=False)
     with st.container(border=True):
-        st.markdown("**✏️ Vuoi cambiarla?** Riaprila nel percorso guidato: puoi correggerla a mano oppure "
-                    "scrivere all'AI cosa modificare (già pagata: non usa crediti). Le modifiche si salvano qui "
-                    "in automatico.")
+        if not app.paid:
+            st.markdown("**📝 Bozza.** Riprendila nel percorso guidato dal punto in cui ti eri "
+                        "fermato. I documenti si scaricano quando la completi: userà 1 credito, come sempre.")
+        elif app.match is None:
+            st.markdown("**➕ Vuoi candidarti a un annuncio con questo CV?** Riprendilo nel percorso guidato: "
+                        "è una nuova candidatura e userà 1 credito quando scarichi i documenti.")
+        else:
+            st.markdown("**✏️ Vuoi cambiarla?** Crea una nuova versione: la correggi a mano o con l'AI e si "
+                        "salva come candidatura a parte. È una nuova candidatura e userà 1 credito quando scarichi "
+                        "i documenti; questa resta invariata.")
         if st.session_state.cv is not None and st.session_state.get("saved_app_id") != app.id:
             st.caption("Sostituisce il lavoro aperto ora nel percorso guidato.")
-        st.button("Riapri e modifica", type="primary", key=f"saved_{app.id}_reopen",
+        label = "Riprendi da qui" if not app.paid else "Usa per un nuovo annuncio" if app.match is None \
+            else "✏️ Crea una nuova versione"
+        st.button(label, type="primary" if not app.paid else "secondary", key=f"saved_{app.id}_reopen",
                   on_click=reopen_application, args=(app.id,))
-    render_pdf_downloads(app.cv, key=f"saved_{app.id}", cover_letter=app.cover_letter, preview=False, charge=False)
+    if app.match is None:
+        with st.container(border=True):
+            st.markdown(CV_MARKDOWN_TEMPLATE.render(cv=app.cv))
+    else:
+        render_saved_tabs(app)
+    with st.popover("🗑️ Elimina candidatura"):
+        st.markdown("Vuoi eliminare questa candidatura? L'operazione non si può annullare.")
+        st.button("Sì, elimina", type="primary", key=f"saved_{app.id}_delete",
+                  on_click=delete_application, args=(app.id,))
+
+
+def render_saved_tabs(app: applications_service.SavedApplication) -> None:
     cv_tab, letter_tab, linkedin_tab = st.tabs(["📄 CV adattato", "✉️ Lettera", "💼 LinkedIn"])
     with cv_tab, st.container(border=True):
         st.markdown(CV_MARKDOWN_TEMPLATE.render(cv=app.cv))
@@ -1886,23 +2230,23 @@ def render_saved_application(app: applications_service.SavedApplication) -> None
             render_copy_block("Headline (titolo sotto il tuo nome)", content.headline, limit=220)
             render_copy_block("Informazioni (sezione «About»)", content.about_section, limit=2600)
             render_copy_block("Post da pubblicare", content.launch_post)
-    with st.popover("🗑️ Elimina candidatura"):
-        st.markdown("Vuoi eliminare questa candidatura? L'operazione non si può annullare.")
-        st.button("Sì, elimina", type="primary", key=f"saved_{app.id}_delete",
-                  on_click=delete_application, args=(app.id,))
 
 
 def render_applications() -> None:
     st.markdown("### 📁 Le mie candidature")
     applications = app_store().list()
     if not applications:
-        st.info("Non hai ancora candidature salvate. Al passo 2 del percorso guidato, dopo aver preparato CV "
-                "e lettera, usa «Salva nelle mie candidature».")
+        st.info("Non hai ancora candidature salvate. Si salvano da sole mentre lavori nel percorso guidato: "
+                "prima il CV, poi CV adattato e lettera, infine i testi LinkedIn.")
         return
-    st.caption(f"{len(applications)} candidature salvate. Riaprirle e scaricarle non consuma crediti.")
+    st.caption(f"{len(applications)} candidature salvate. Si salvano da sole mentre lavori: le bozze si "
+               "riprendono quando vuoi; quelle completate si scaricano senza usare crediti e restano invariate "
+               "(per cambiarle se ne crea una nuova versione, con 1 credito).")
     for app in applications:
         score = f" · {app.match_score}%" if app.match_score is not None else ""
-        with st.expander(f"🏢 **{app.title}** · {format_date(app.created_at)}{score}"):
+        badge = (" · 📝 bozza" + (f" ({app.stage})" if app.stage != "completa" else "")
+                 if not app.paid or app.match is None else "")
+        with st.expander(f"🏢 **{app.title}** · {format_date(app.created_at)}{score}{badge}"):
             render_saved_application(app)
 
 
@@ -2137,6 +2481,9 @@ def main() -> None:
     if (doc := st.query_params.get("doc")) in LEGAL_DOCS:
         render_legal_page(doc)
         return
+    if doc == GUIDE_DOC:
+        render_guide_page()
+        return
 
     payment = st.query_params.pop("payment", None)
     if payment in ("success", "cancel") and user is not None and render_payment_return(payment):
@@ -2149,8 +2496,8 @@ def main() -> None:
         return
 
     open_pending_dialogs()
-    # Le modifiche fatte dopo il salvataggio finiscono nell'archivio prima di mostrarlo.
-    sync_saved_application()
+    # CV, annuncio e LinkedIn finiscono nell'archivio a ogni passo, prima di mostrarlo.
+    autosave_application()
     view = st.session_state.view
     if view == ARCHIVE_VIEW and user.has_applications_archive:
         render_applications()

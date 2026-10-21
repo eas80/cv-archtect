@@ -59,6 +59,16 @@ class JobMatchResult(BaseModel):
     )
     tailored_cv: ResumeData = Field(description="CV riscritto e ottimizzato per l'annuncio.")
     cover_letter: str = Field(description="Lettera di presentazione mirata all'annuncio.")
+    # Per il titolo della candidatura in «Le mie candidature»; vuoti nelle candidature meno recenti.
+    company_name: str = Field(default="", description="Nome dell'azienda che pubblica l'annuncio; vuoto se non indicato.")
+    job_title: str = Field(default="", description="Ruolo cercato dall'annuncio, breve (es. 'QA Specialist').")
+
+
+class TailoredApplication(JobMatchResult):
+    """Risposta dell'AI all'adattamento: come JobMatchResult, con azienda e ruolo sempre richiesti."""
+
+    company_name: str = Field(description="Nome dell'azienda che pubblica l'annuncio; vuoto se non indicato.")
+    job_title: str = Field(description="Ruolo cercato dall'annuncio, breve (es. 'QA Specialist').")
 
 
 class JobPostingCheck(BaseModel):

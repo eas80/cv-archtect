@@ -131,6 +131,9 @@ CREATE TABLE IF NOT EXISTS saved_applications (
     match_json    JSONB
 );
 CREATE INDEX IF NOT EXISTS saved_applications_user_idx ON saved_applications (user_id, created_at DESC);
+-- Salvataggio automatico: anche bozze non ancora pagate (solo CV, o senza consegna). Quelle salvate a mano
+-- prima di questa colonna erano già pagate.
+ALTER TABLE saved_applications ADD COLUMN IF NOT EXISTS paid BOOLEAN NOT NULL DEFAULT TRUE;
 
 -- Crediti per lotto (acquisto, regalo dell'admin, crediti iniziali): ogni lotto scade dopo
 -- CREDITS_VALIDITY_MONTHS mesi e si consumano prima i lotti che scadono prima.

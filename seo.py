@@ -32,6 +32,9 @@ DOC_PAGES = {
                 "Termini e condizioni di servizio di CV Architect: crediti, pagamenti, recesso e responsabilità."),
     "privacy": ("Privacy e cookie – CV Architect",
                 "Informativa privacy e cookie di CV Architect: quali dati trattiamo, perché, per quanto tempo e i tuoi diritti."),
+    "come-funziona": ("Come funziona – CV Architect",
+                      "Come funziona CV Architect passo per passo: CV letto dall'AI, compatibilità con l'annuncio, "
+                      "lettera e LinkedIn."),
 }
 
 
@@ -59,11 +62,18 @@ def faq(packs: dict[str, CreditPack] | None = None) -> list[tuple[str, str]]:
          "correttamente e risulta pertinente."),
         ("Quanto costa?",
          "Non c'è abbonamento: compri crediti quando ti servono. Un credito vale una candidatura completa "
-         "(CV adattato, lettera di presentazione e testi LinkedIn). Si parte da "
+         "(CV adattato, indice di compatibilità, lettera di presentazione e testi LinkedIn). Si parte da "
          f"{price_from(packs)} a candidatura e i crediti valgono 24 mesi."),
+        ("Quando si usa il credito? Posso modificare la candidatura dopo averla scaricata?",
+         "Il credito si scala solo alla consegna: quando scarichi o salvi i documenti, o generi i testi LinkedIn. "
+         "Fino ad allora puoi correggere, chiedere modifiche all'AI e tradurre in inglese quanto vuoi. Dopo la "
+         "consegna scaricare i documenti e correggerli a mano è sempre gratis; ogni altra elaborazione con l'AI "
+         "(nuove modifiche, traduzioni, altri testi LinkedIn) crea una nuova versione della candidatura e usa un "
+         "nuovo credito. L'app ti avvisa sempre prima."),
         ("In che formati posso scaricare il CV?",
-         "Il CV e la lettera di presentazione si scaricano in PDF, con diversi modelli grafici tra cui "
-         "scegliere. Sono disponibili anche i formati testo, Markdown e JSON."),
+         "Il CV e la lettera di presentazione si scaricano in PDF, in italiano o in inglese, con diversi modelli "
+         "grafici tra cui scegliere. Alla fine del percorso trovi tutti i documenti insieme, anche in un unico "
+         "file ZIP. Sono disponibili anche i formati testo, Markdown e JSON."),
         ("I miei dati sono al sicuro?",
          "I dati sono conservati su server nell'Unione Europea e non vengono usati per addestrare modelli di "
          "Intelligenza Artificiale. Puoi eliminare l'account e tutti i dati in qualsiasi momento dal menu."),

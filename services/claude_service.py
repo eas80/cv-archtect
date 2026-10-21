@@ -17,6 +17,7 @@ from schemas import (
     JobPostingCheck,
     LinkedInContent,
     ResumeData,
+    TailoredApplication,
     TranslatedDocuments,
 )
 
@@ -92,6 +93,8 @@ per quel ruolo in quell'azienda, porta due o tre risultati del CV che rispondono
 chiudi con una disponibilità al colloquio. Niente formule di rito ("Con la presente", "Spett.le", \
 "Sono entusiasta di").
 - Scrivi CV adattato e lettera nella lingua dell'annuncio.
+- company_name e job_title: azienda e ruolo come compaiono nell'annuncio (ruolo in forma breve); \
+stringa vuota se l'annuncio non li indica.
 
 {_STYLE_RULES}"""
 
@@ -224,15 +227,16 @@ class ClaudeCVService:
         )
 
     def tailor_cv_for_job(self, current_cv: ResumeData, job_description: str) -> JobMatchResult:
-        return self._structured_call(
+        result = self._structured_call(
             system=_TAILOR_SYSTEM,
             user_content=(
                 f"<cv>\n{current_cv.model_dump_json(indent=2)}\n</cv>\n\n"
                 f"<annuncio>\n{job_description}\n</annuncio>\n\n"
                 "Valuta l'affinità, adatta il CV e scrivi la lettera di presentazione."
             ),
-            schema=JobMatchResult,
+            schema=TailoredApplication,
         )
+        return JobMatchResult.model_validate(result.model_dump())
 
     def revise_application(
         self,

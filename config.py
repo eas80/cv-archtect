@@ -74,7 +74,7 @@ EMAIL_CODE_RESEND_SECONDS = 60
 # --- Documenti legali ---------------------------------------------------------
 # Testi in legal/*.md. Cambiando i testi in modo sostanziale si aggiorna la versione (data):
 # alla registrazione si salva quella accettata dall'utente.
-LEGAL_VERSION = "2026-10-19"
+LEGAL_VERSION = "2026-10-21"
 
 # --- Ambiente -----------------------------------------------------------------
 # Nome dell'ambiente negli avvisi: APP_ENV se impostato, altrimenti dal ramo che Render pubblica.
