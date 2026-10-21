@@ -1020,7 +1020,7 @@ def render_guide_cta(key: str) -> None:
     user = current_user()
     with st.container(border=True):
         st.markdown("#### Pronto per la tua prossima candidatura?")
-        st.markdown(f"Nessun abbonamento: {price_hook()} Il credito si scala solo quando scarichi o salvi i "
+        st.markdown(f"Nessun abbonamento. {price_hook()} Il credito si scala solo quando scarichi o salvi i "
                     "documenti: fino ad allora puoi provare, correggere e rigenerare quanto vuoi.")
         if user is None:
             st.button("Crea il tuo account", type="primary", use_container_width=True, key=f"{key}_signup",
@@ -1312,9 +1312,12 @@ def translation_key(cv: ResumeData, cover_letter: str | None, language: str) -> 
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-def documents_in_language(cv: ResumeData, cover_letter: str | None, key: str,
-                          language: str) -> tuple[ResumeData, str | None]:
-    """CV e lettera nella lingua scelta: gli originali, la traduzione già fatta o la proposta di tradurli."""
+def documents_in_language(cv: ResumeData, cover_letter: str | None, key: str, language: str,
+                          translate: bool = True) -> tuple[ResumeData, str | None]:
+    """CV e lettera nella lingua scelta: gli originali, la traduzione già fatta o la proposta di tradurli.
+
+    Senza `translate` (archivio: candidatura già consegnata) niente traduzione con l'AI: cambiano solo i titoli.
+    """
     source = guess_language(cv.professional_summary, *(h for e in cv.experiences for h in e.highlights),
                             cover_letter or "")
     if language == source:
@@ -1328,6 +1331,10 @@ def documents_in_language(cv: ResumeData, cover_letter: str | None, key: str,
         return ResumeData.model_validate_json(translated_cv), translated_letter
 
     what = "CV e lettera" if cover_letter else "il CV"
+    if not translate:
+        st.caption(f"Il testo è in {LANGUAGE_NAMES[source]}: in {LANGUAGE_NAMES[language]} cambiano solo i titoli. "
+                   "Per tradurre anche il testo crea una nuova versione della candidatura (1 credito).")
+        return cv, cover_letter
     with st.container(border=True):
         st.markdown(f"**Il testo è in {LANGUAGE_NAMES[source]}.** Per avere {what} in {LANGUAGE_NAMES[language]} "
                     "li traduciamo con l'AI; nel frattempo l'anteprima mostra i titoli nella nuova lingua "
@@ -1362,7 +1369,7 @@ def render_pdf_downloads(cv: ResumeData, key: str, cover_letter: str | None = No
         key=f"{key}_language", required=True,
         help="Lingua di titoli e testi. Se scegli una lingua diversa da quella del CV, puoi farlo tradurre.",
     )
-    cv, cover_letter = documents_in_language(cv, cover_letter, key, language)
+    cv, cover_letter = documents_in_language(cv, cover_letter, key, language, translate=charge)
     if preview:
         st.markdown("**Scegli lo stile** guardando l'anteprima:")
         template = render_template_gallery(cv, key, language)
