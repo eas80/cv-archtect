@@ -41,9 +41,9 @@ def price_from(packs: dict[str, CreditPack] | None = None) -> str:
 
 
 def description(packs: dict[str, CreditPack] | None = None) -> str:
-    return ("Carica il tuo curriculum: l'Intelligenza Artificiale lo adatta a ogni offerta di lavoro, "
-            "lo ottimizza per gli ATS, scrive la lettera di presentazione e prepara il profilo LinkedIn. "
-            f"Da {price_from(packs)} a candidatura, senza abbonamento.")
+    # 120-160 caratteri: oltre, Google la taglia nei risultati di ricerca.
+    return ("Crea con l'AI un CV su misura per ogni annuncio, ottimizzato per gli ATS, con lettera di "
+            f"presentazione e profilo LinkedIn. Da {price_from(packs)} a candidatura.")
 
 
 def faq(packs: dict[str, CreditPack] | None = None) -> list[tuple[str, str]]:
@@ -109,7 +109,8 @@ def _structured_data(base: str, packs: dict[str, CreditPack]) -> str:
 
 
 def _head(base: str, title: str, description: str, url: str, packs: dict[str, CreditPack]) -> str:
-    e = html.escape
+    def e(text: str) -> str:  # apostrofi in chiaro: alcuni strumenti SEO leggono il sorgente così com'è
+        return html.escape(text, quote=False).replace('"', "&quot;")
     robots = "noindex, nofollow" if config.SEO_NOINDEX else "index, follow"
     verification = (f'<meta name="google-site-verification" content="{e(config.GOOGLE_SITE_VERIFICATION)}" />'
                     if config.GOOGLE_SITE_VERIFICATION else "")
@@ -120,7 +121,10 @@ def _head(base: str, title: str, description: str, url: str, packs: dict[str, Cr
     <meta name="theme-color" content="#2563EB" />
     {verification}
     <link rel="canonical" href="{e(url)}" />
-    <link rel="apple-touch-icon" href="{base}/icon-180.png" />
+    <link rel="icon" href="{base}/favicon.ico" sizes="16x16 32x32 48x48" />
+    <link rel="icon" type="image/png" sizes="48x48" href="{base}/icon-48.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="{base}/icon-512.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="{base}/icon-180.png" />
     <meta property="og:type" content="website" />
     <meta property="og:locale" content="it_IT" />
     <meta property="og:site_name" content="{e(config.APP_TITLE)}" />
@@ -191,8 +195,8 @@ def _page(doc: str | None, pack_list: tuple[CreditPack, ...]) -> str:
     page = _streamlit_index()
     page = page.replace('<html lang="en">', '<html lang="it">', 1)
     page = page.replace("<title>Streamlit</title>", _head(base, title, desc, url, packs), 1)
-    page = page.replace('<link rel="shortcut icon" href="./favicon.png" />',
-                        '<link rel="icon" type="image/png" href="./favicon.png" />', 1)
+    # Le icone del sito sono già nell'head: si toglie il logo di Streamlit.
+    page = page.replace('<link rel="shortcut icon" href="./favicon.png" />', "", 1)
     page = page.replace("<noscript>You need to enable JavaScript to run this app.</noscript>",
                         "<noscript>Per usare CV Architect attiva JavaScript nel browser.</noscript>", 1)
     # Streamlit monta l'app in #root e ne sostituisce il contenuto.
@@ -240,6 +244,7 @@ ROUTES = [
     Route("/icon-180.png", _asset("icon-180.png")),
     Route("/icon-512.png", _asset("icon-512.png")),
     # Al posto del logo di Streamlit (lo usano i browser e Google nei risultati di ricerca).
-    Route("/favicon.png", _asset("icon-32.png")),
-    Route("/favicon.ico", _asset("icon-32.png")),
+    Route("/icon-48.png", _asset("icon-48.png")),
+    Route("/favicon.png", _asset("icon-48.png")),
+    Route("/favicon.ico", _asset("favicon.ico")),
 ]
